@@ -3,7 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/kevingstewart/xcbackup/internal/backup"
+	"github.com/kevingstewart/xcbackup/internal/client"
+	"github.com/kevingstewart/xcbackup/internal/registry"
 	"github.com/spf13/cobra"
 )
 
@@ -58,7 +62,80 @@ func main() {
 }
 
 func runBackup(cmd *cobra.Command, args []string) error {
-	fmt.Println("backup: not yet implemented")
+	tenant, _ := cmd.Flags().GetString("tenant")
+	namespace, _ := cmd.Flags().GetString("namespace")
+	token, _ := cmd.Flags().GetString("token")
+	certFile, _ := cmd.Flags().GetString("cert")
+	keyFile, _ := cmd.Flags().GetString("key")
+	parallel, _ := cmd.Flags().GetInt("parallel")
+	outputDir, _ := cmd.Flags().GetString("output-dir")
+	types, _ := cmd.Flags().GetStringSlice("types")
+	excludeTypes, _ := cmd.Flags().GetStringSlice("exclude-types")
+
+	if tenant == "" || namespace == "" {
+		return fmt.Errorf("--tenant and --namespace are required")
+	}
+	if token == "" {
+		token = os.Getenv("XC_API_TOKEN")
+	}
+	if token == "" && certFile == "" {
+		return fmt.Errorf("provide --token (or XC_API_TOKEN) or --cert/--key")
+	}
+
+	var opts []client.Option
+	if token != "" {
+		opts = append(opts, client.WithToken(token))
+	}
+	if certFile != "" && keyFile != "" {
+		opts = append(opts, client.WithCert(certFile, keyFile))
+	}
+	opts = append(opts, client.WithParallel(parallel))
+	c := client.New(tenant, opts...)
+
+	resources := registry.All()
+	if len(types) > 0 {
+		resources = registry.FilterByKinds(resources, types)
+	}
+	if len(excludeTypes) > 0 {
+		resources = registry.ExcludeKinds(resources, excludeTypes)
+	}
+
+	if outputDir == "" {
+		outputDir = fmt.Sprintf("backup-%s-%s", namespace, time.Now().UTC().Format("2006-01-02T15-04-05Z"))
+	}
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("creating output directory: %w", err)
+	}
+
+	fmt.Printf("Backing up namespace %q from %s\n", namespace, c.BaseURL())
+	fmt.Printf("Output: %s\n\n", outputDir)
+
+	result, err := backup.Run(c, &backup.Options{
+		Namespace: namespace,
+		OutputDir: outputDir,
+		Resources: resources,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nBackup complete: %d objects\n", result.ObjectCount)
+	for kind, count := range result.ResourceCounts {
+		fmt.Printf("  %-30s %d\n", kind, count)
+	}
+	if len(result.Warnings) > 0 {
+		fmt.Printf("\nWarnings:\n")
+		for _, w := range result.Warnings {
+			fmt.Printf("  ⚠ %s\n", w)
+		}
+	}
+	if len(result.Errors) > 0 {
+		fmt.Printf("\nErrors:\n")
+		for _, e := range result.Errors {
+			fmt.Printf("  ✗ %s\n", e)
+		}
+	}
+
 	return nil
 }
 
