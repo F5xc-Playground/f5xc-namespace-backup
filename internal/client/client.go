@@ -19,6 +19,7 @@ type Client struct {
 	token      string
 	sem        chan struct{}
 	mu         sync.Mutex
+	certErr    error
 }
 
 type Option func(*Client)
@@ -31,7 +32,8 @@ func WithCert(certFile, keyFile string) Option {
 	return func(c *Client) {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
-			slog.Error("failed to load client certificate", "error", err)
+			slog.Error("failed to load client certificate", "error", err, "cert", certFile, "key", keyFile)
+			c.certErr = err
 			return
 		}
 		transport := &http.Transport{
@@ -74,6 +76,10 @@ func NewForTest(baseURL string, httpClient *http.Client, token string) *Client {
 }
 
 func (c *Client) do(method, path string, body io.Reader) ([]byte, int, error) {
+	if c.certErr != nil {
+		return nil, 0, fmt.Errorf("client certificate error: %w", c.certErr)
+	}
+
 	c.sem <- struct{}{}
 	defer func() { <-c.sem }()
 

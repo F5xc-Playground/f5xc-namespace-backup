@@ -101,3 +101,55 @@ func TestClient_Create(t *testing.T) {
 		t.Error("Create() did not send correct body")
 	}
 }
+
+func TestClient_Replace(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" {
+			t.Errorf("unexpected method: %s, want PUT", r.Method)
+		}
+		json.NewDecoder(r.Body).Decode(&received)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(received)
+	}))
+	defer server.Close()
+
+	c := &Client{
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+		token:      "test-token",
+		sem:        make(chan struct{}, 10),
+	}
+
+	obj := map[string]any{
+		"metadata": map[string]any{"name": "hc1"},
+		"spec":     map[string]any{"timeout": 5},
+	}
+	err := c.Replace("/api/config/namespaces/prod/healthchecks/hc1", obj)
+	if err != nil {
+		t.Fatalf("Replace() error: %v", err)
+	}
+	if received["metadata"].(map[string]any)["name"] != "hc1" {
+		t.Error("Replace() did not send correct body")
+	}
+}
+
+func TestClient_APIError(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"code": 5, "message": "not found"}`))
+	}))
+	defer server.Close()
+
+	c := &Client{
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+		token:      "test-token",
+		sem:        make(chan struct{}, 10),
+	}
+
+	_, err := c.Get("/api/config/namespaces/prod/healthchecks/nonexistent")
+	if err == nil {
+		t.Fatal("Get() should return error for 404")
+	}
+}
