@@ -7,7 +7,9 @@ import (
 
 	"github.com/kevingstewart/xcbackup/internal/backup"
 	"github.com/kevingstewart/xcbackup/internal/client"
+	"github.com/kevingstewart/xcbackup/internal/inspect"
 	"github.com/kevingstewart/xcbackup/internal/registry"
+	"github.com/kevingstewart/xcbackup/internal/restore"
 	"github.com/spf13/cobra"
 )
 
@@ -140,11 +142,77 @@ func runBackup(cmd *cobra.Command, args []string) error {
 }
 
 func runRestore(cmd *cobra.Command, args []string) error {
-	fmt.Println("restore: not yet implemented")
+	tenant, _ := cmd.Flags().GetString("tenant")
+	namespace, _ := cmd.Flags().GetString("namespace")
+	token, _ := cmd.Flags().GetString("token")
+	certFile, _ := cmd.Flags().GetString("cert")
+	keyFile, _ := cmd.Flags().GetString("key")
+	parallel, _ := cmd.Flags().GetInt("parallel")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	onConflict, _ := cmd.Flags().GetString("on-conflict")
+	types, _ := cmd.Flags().GetStringSlice("types")
+
+	if tenant == "" || namespace == "" {
+		return fmt.Errorf("--tenant and --namespace are required")
+	}
+	if token == "" {
+		token = os.Getenv("XC_API_TOKEN")
+	}
+	if token == "" && certFile == "" {
+		return fmt.Errorf("provide --token (or XC_API_TOKEN) or --cert/--key")
+	}
+
+	var opts []client.Option
+	if token != "" {
+		opts = append(opts, client.WithToken(token))
+	}
+	if certFile != "" && keyFile != "" {
+		opts = append(opts, client.WithCert(certFile, keyFile))
+	}
+	opts = append(opts, client.WithParallel(parallel))
+	c := client.New(tenant, opts...)
+
+	resources := registry.All()
+	if len(types) > 0 {
+		resources = registry.FilterByKinds(resources, types)
+	}
+
+	backupDir := args[0]
+
+	if dryRun {
+		fmt.Println("DRY RUN -- no changes will be made")
+	}
+
+	fmt.Printf("Restoring to namespace %q on %s\n", namespace, c.BaseURL())
+	fmt.Printf("From backup: %s\n\n", backupDir)
+
+	result, err := restore.Run(c, &restore.Options{
+		BackupDir:       backupDir,
+		TargetNamespace: namespace,
+		Resources:       resources,
+		DryRun:          dryRun,
+		OnConflict:      onConflict,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nRestore complete:\n")
+	fmt.Printf("  Created:  %d\n", result.Created)
+	fmt.Printf("  Updated:  %d\n", result.Updated)
+	fmt.Printf("  Skipped:  %d\n", result.Skipped)
+	fmt.Printf("  Failed:   %d\n", result.Failed)
+
+	if len(result.Errors) > 0 {
+		fmt.Printf("\nErrors:\n")
+		for _, e := range result.Errors {
+			fmt.Printf("  x %s\n", e)
+		}
+	}
+
 	return nil
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {
-	fmt.Println("inspect: not yet implemented")
-	return nil
+	return inspect.Run(args[0], os.Stdout)
 }
