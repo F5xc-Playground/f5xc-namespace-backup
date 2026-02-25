@@ -2,6 +2,7 @@ package restore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,11 +24,13 @@ type Options struct {
 }
 
 type Result struct {
-	Created int
-	Skipped int
-	Updated int
-	Failed  int
-	Errors  []string
+	Created    int
+	Skipped    int
+	Updated    int
+	Failed     int
+	Errors     []string
+	Warnings   []string
+	AuthFailed bool
 }
 
 func Run(c *client.Client, opts *Options) (*Result, error) {
@@ -120,7 +123,7 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 						case "overwrite":
 							if err := c.Replace(getPath, restored); err != nil {
 								mu.Lock()
-								result.Errors = append(result.Errors, fmt.Sprintf("replace %s/%s: %v", res.Kind, name, err))
+								result.Errors = append(result.Errors, fmt.Sprintf("Failed to replace %s/%s: %v", res.Kind, name, err))
 								result.Failed++
 								mu.Unlock()
 								continue
@@ -140,8 +143,19 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 					}
 
 					if err := c.Create(listPath, restored); err != nil {
+						var apiErr *client.APIError
+						if errors.As(err, &apiErr) {
+							if apiErr.StatusCode == 401 {
+								mu.Lock()
+								result.Errors = append(result.Errors, fmt.Sprintf("Failed to create %s/%s: %v", res.Kind, name, err))
+								result.AuthFailed = true
+								result.Failed++
+								mu.Unlock()
+								return
+							}
+						}
 						mu.Lock()
-						result.Errors = append(result.Errors, fmt.Sprintf("create %s/%s: %v", res.Kind, name, err))
+						result.Errors = append(result.Errors, fmt.Sprintf("Failed to create %s/%s: %v", res.Kind, name, err))
 						result.Failed++
 						mu.Unlock()
 						continue
@@ -156,6 +170,10 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 		}
 
 		wg.Wait()
+
+		if result.AuthFailed {
+			return result, fmt.Errorf("authentication failed — check your API token or certificate")
+		}
 	}
 
 	return result, nil

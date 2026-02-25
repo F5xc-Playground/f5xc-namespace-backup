@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/kevingstewart/xcbackup/internal/backup"
@@ -56,7 +57,13 @@ func main() {
 		RunE:  runInspect,
 	}
 
-	rootCmd.AddCommand(backupCmd, restoreCmd, inspectCmd)
+	namespacesCmd := &cobra.Command{
+		Use:   "namespaces",
+		Short: "List available namespaces",
+		RunE:  runNamespaces,
+	}
+
+	rootCmd.AddCommand(backupCmd, restoreCmd, inspectCmd, namespacesCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -125,18 +132,8 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	for kind, count := range result.ResourceCounts {
 		fmt.Printf("  %-30s %d\n", kind, count)
 	}
-	if len(result.Warnings) > 0 {
-		fmt.Printf("\nWarnings:\n")
-		for _, w := range result.Warnings {
-			fmt.Printf("  ⚠ %s\n", w)
-		}
-	}
-	if len(result.Errors) > 0 {
-		fmt.Printf("\nErrors:\n")
-		for _, e := range result.Errors {
-			fmt.Printf("  ✗ %s\n", e)
-		}
-	}
+	printWarnings(result.Warnings)
+	printErrors(result.Errors)
 
 	return nil
 }
@@ -203,16 +200,94 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Skipped:  %d\n", result.Skipped)
 	fmt.Printf("  Failed:   %d\n", result.Failed)
 
-	if len(result.Errors) > 0 {
-		fmt.Printf("\nErrors:\n")
-		for _, e := range result.Errors {
-			fmt.Printf("  x %s\n", e)
-		}
-	}
+	printWarnings(result.Warnings)
+	printErrors(result.Errors)
 
 	return nil
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {
 	return inspect.Run(args[0], os.Stdout)
+}
+
+func runNamespaces(cmd *cobra.Command, args []string) error {
+	tenant, _ := cmd.Flags().GetString("tenant")
+	token, _ := cmd.Flags().GetString("token")
+	certFile, _ := cmd.Flags().GetString("cert")
+	keyFile, _ := cmd.Flags().GetString("key")
+
+	if tenant == "" {
+		return fmt.Errorf("--tenant is required")
+	}
+	if token == "" {
+		token = os.Getenv("XC_API_TOKEN")
+	}
+	if token == "" && certFile == "" {
+		return fmt.Errorf("provide --token (or XC_API_TOKEN) or --cert/--key")
+	}
+
+	var opts []client.Option
+	if token != "" {
+		opts = append(opts, client.WithToken(token))
+	}
+	if certFile != "" && keyFile != "" {
+		opts = append(opts, client.WithCert(certFile, keyFile))
+	}
+	c := client.New(tenant, opts...)
+
+	items, err := c.List("/api/web/namespaces")
+	if err != nil {
+		return fmt.Errorf("listing namespaces: %w", err)
+	}
+
+	for _, item := range items {
+		if md, ok := item["metadata"].(map[string]any); ok {
+			if name, ok := md["name"].(string); ok {
+				fmt.Println(name)
+			}
+		}
+	}
+
+	return nil
+}
+
+// printWarnings groups and prints warnings with a count header.
+func printWarnings(warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+
+	// Count "skipped" warnings (inaccessible resource types) vs other warnings
+	var skippedKinds []string
+	var otherWarnings []string
+	for _, w := range warnings {
+		if strings.HasPrefix(w, "skipped ") && strings.HasSuffix(w, "not accessible (may require subscription)") {
+			// Extract the kind name
+			kind := strings.TrimPrefix(w, "skipped ")
+			kind = strings.TrimSuffix(kind, ": not accessible (may require subscription)")
+			skippedKinds = append(skippedKinds, kind)
+		} else {
+			otherWarnings = append(otherWarnings, w)
+		}
+	}
+
+	if len(skippedKinds) > 0 {
+		fmt.Printf("\nWarnings (%d resource types not accessible):\n", len(skippedKinds))
+		fmt.Printf("  Skipped: %s\n", strings.Join(skippedKinds, ", "))
+	}
+
+	for _, w := range otherWarnings {
+		fmt.Printf("  ! %s\n", w)
+	}
+}
+
+// printErrors prints errors with a count header.
+func printErrors(errs []string) {
+	if len(errs) == 0 {
+		return
+	}
+	fmt.Printf("\nErrors (%d):\n", len(errs))
+	for _, e := range errs {
+		fmt.Printf("  x %s\n", e)
+	}
 }

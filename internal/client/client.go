@@ -12,6 +12,64 @@ import (
 	"sync"
 )
 
+// APIError represents a structured error from the F5 XC API.
+type APIError struct {
+	StatusCode int
+	Message    string // parsed from response JSON
+	Body       string // raw response (truncated to 200 chars)
+}
+
+func (e *APIError) Error() string {
+	hint := statusHint(e.StatusCode)
+	if e.Message != "" {
+		return fmt.Sprintf("%s: %s", hint, e.Message)
+	}
+	return hint
+}
+
+func statusHint(code int) string {
+	switch code {
+	case 401:
+		return "authentication failed — check your API token or certificate"
+	case 403:
+		return "permission denied — your credentials may not have access to this resource"
+	case 404:
+		return "not found"
+	case 409:
+		return "conflict — object already exists"
+	case 429:
+		return "rate limited — try reducing --parallel"
+	default:
+		if code >= 500 {
+			return fmt.Sprintf("server error %d — try again later", code)
+		}
+		return fmt.Sprintf("API error %d", code)
+	}
+}
+
+func parseAPIError(statusCode int, data []byte) *APIError {
+	ae := &APIError{StatusCode: statusCode}
+
+	// Truncate raw body for storage
+	body := string(data)
+	if len(body) > 200 {
+		body = body[:200]
+	}
+	ae.Body = body
+
+	// Try to extract message from JSON
+	var parsed map[string]any
+	if json.Unmarshal(data, &parsed) == nil {
+		if msg, ok := parsed["message"].(string); ok && msg != "" {
+			ae.Message = msg
+		} else if msg, ok := parsed["error"].(string); ok && msg != "" {
+			ae.Message = msg
+		}
+	}
+
+	return ae
+}
+
 // Client is an F5 XC API client.
 type Client struct {
 	baseURL    string
@@ -107,7 +165,7 @@ func (c *Client) do(method, path string, body io.Reader) ([]byte, int, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		return data, resp.StatusCode, fmt.Errorf("API error %d: %s", resp.StatusCode, string(data))
+		return data, resp.StatusCode, parseAPIError(resp.StatusCode, data)
 	}
 
 	return data, resp.StatusCode, nil

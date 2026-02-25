@@ -2,6 +2,7 @@ package backup
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -30,6 +31,7 @@ type Result struct {
 	SkippedChildren []string
 	Warnings        []string
 	Errors          []string
+	AuthFailed      bool
 }
 
 func Run(c *client.Client, opts *Options) (*Result, error) {
@@ -60,9 +62,26 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 
 			items, err := c.List(listPath)
 			if err != nil {
+				var apiErr *client.APIError
+				if errors.As(err, &apiErr) {
+					if apiErr.StatusCode == 401 {
+						mu.Lock()
+						result.Errors = append(result.Errors, fmt.Sprintf("Failed to list %s resources: %v", res.Kind, err))
+						result.AuthFailed = true
+						mu.Unlock()
+						return
+					}
+					if apiErr.StatusCode == 403 || apiErr.StatusCode == 404 {
+						slog.Debug("skipping inaccessible resource type", "kind", res.Kind, "status", apiErr.StatusCode)
+						mu.Lock()
+						result.Warnings = append(result.Warnings, fmt.Sprintf("skipped %s: not accessible (may require subscription)", res.Kind))
+						mu.Unlock()
+						return
+					}
+				}
 				slog.Warn("failed to list", "kind", res.Kind, "error", err)
 				mu.Lock()
-				result.Errors = append(result.Errors, fmt.Sprintf("list %s: %v", res.Kind, err))
+				result.Errors = append(result.Errors, fmt.Sprintf("Failed to list %s resources: %v", res.Kind, err))
 				mu.Unlock()
 				return
 			}
@@ -131,6 +150,10 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 	}
 
 	wg.Wait()
+
+	if result.AuthFailed {
+		return result, fmt.Errorf("authentication failed — check your API token or certificate")
+	}
 
 	m := &manifest.Manifest{
 		Version:             "1",
