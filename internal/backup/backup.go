@@ -99,8 +99,13 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 			}
 
 			for _, item := range items {
-				md, _ := item["metadata"].(map[string]any)
-				name, _ := md["name"].(string)
+				// List responses may have name at top level or under metadata
+				name, _ := item["name"].(string)
+				if name == "" {
+					if md, ok := item["metadata"].(map[string]any); ok {
+						name, _ = md["name"].(string)
+					}
+				}
 				if name == "" {
 					continue
 				}

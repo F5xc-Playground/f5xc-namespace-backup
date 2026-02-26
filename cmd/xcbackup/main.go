@@ -241,10 +241,9 @@ func runNamespaces(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, item := range items {
-		if md, ok := item["metadata"].(map[string]any); ok {
-			if name, ok := md["name"].(string); ok {
-				fmt.Println(name)
-			}
+		// The /api/web/namespaces endpoint returns name at top level, not under metadata
+		if name, ok := item["name"].(string); ok {
+			fmt.Println(name)
 		}
 	}
 
