@@ -78,6 +78,13 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 						mu.Unlock()
 						return
 					}
+					if apiErr.StatusCode == 501 {
+						slog.Debug("skipping unimplemented resource type", "kind", res.Kind)
+						mu.Lock()
+						result.Warnings = append(result.Warnings, fmt.Sprintf("skipped %s: not implemented", res.Kind))
+						mu.Unlock()
+						return
+					}
 				}
 				slog.Warn("failed to list", "kind", res.Kind, "error", err)
 				mu.Lock()
