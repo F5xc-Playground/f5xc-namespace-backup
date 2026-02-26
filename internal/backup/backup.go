@@ -110,6 +110,13 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 					continue
 				}
 
+				// List API merges objects from shared/system namespaces.
+				// Skip objects that don't belong to the target namespace.
+				if itemNS, ok := item["namespace"].(string); ok && itemNS != "" && itemNS != opts.Namespace {
+					slog.Debug("skipping object from different namespace", "kind", res.Kind, "name", name, "object_ns", itemNS, "target_ns", opts.Namespace)
+					continue
+				}
+
 				getPath := listPath + "/" + name
 				obj, err := c.Get(getPath)
 				if err != nil {
