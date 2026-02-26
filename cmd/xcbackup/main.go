@@ -3,14 +3,17 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/kevingstewart/xcbackup/internal/backup"
 	"github.com/kevingstewart/xcbackup/internal/client"
+	"github.com/kevingstewart/xcbackup/internal/diff"
 	"github.com/kevingstewart/xcbackup/internal/inspect"
 	"github.com/kevingstewart/xcbackup/internal/registry"
 	"github.com/kevingstewart/xcbackup/internal/restore"
+	"github.com/kevingstewart/xcbackup/internal/revert"
 	"github.com/spf13/cobra"
 )
 
@@ -50,6 +53,26 @@ func main() {
 	restoreCmd.Flags().String("on-conflict", "skip", "Behavior when object exists: skip, overwrite, fail")
 	restoreCmd.Flags().StringSlice("types", nil, "Only restore these resource types")
 
+	diffCmd := &cobra.Command{
+		Use:   "diff [backup-dir]",
+		Short: "Compare live namespace state against a backup snapshot",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runDiff,
+	}
+	diffCmd.Flags().StringSlice("types", nil, "Only diff these resource types")
+	diffCmd.Flags().StringSlice("exclude-types", nil, "Skip these resource types")
+
+	revertCmd := &cobra.Command{
+		Use:   "revert [backup-dir]",
+		Short: "Revert drifted objects to their backup state",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runRevert,
+	}
+	revertCmd.Flags().Bool("dry-run", false, "Preview without making changes")
+	revertCmd.Flags().Bool("delete-extra", false, "Delete objects added since backup")
+	revertCmd.Flags().StringSlice("types", nil, "Only revert these resource types")
+	revertCmd.Flags().StringSlice("exclude-types", nil, "Skip these resource types")
+
 	inspectCmd := &cobra.Command{
 		Use:   "inspect [backup-dir]",
 		Short: "Inspect a backup directory",
@@ -63,32 +86,29 @@ func main() {
 		RunE:  runNamespaces,
 	}
 
-	rootCmd.AddCommand(backupCmd, restoreCmd, inspectCmd, namespacesCmd)
+	rootCmd.AddCommand(backupCmd, restoreCmd, diffCmd, revertCmd, inspectCmd, namespacesCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func runBackup(cmd *cobra.Command, args []string) error {
+// buildClient creates an API client from common CLI flags.
+func buildClient(cmd *cobra.Command) (*client.Client, error) {
 	tenant, _ := cmd.Flags().GetString("tenant")
-	namespace, _ := cmd.Flags().GetString("namespace")
 	token, _ := cmd.Flags().GetString("token")
 	certFile, _ := cmd.Flags().GetString("cert")
 	keyFile, _ := cmd.Flags().GetString("key")
 	parallel, _ := cmd.Flags().GetInt("parallel")
-	outputDir, _ := cmd.Flags().GetString("output-dir")
-	types, _ := cmd.Flags().GetStringSlice("types")
-	excludeTypes, _ := cmd.Flags().GetStringSlice("exclude-types")
 
-	if tenant == "" || namespace == "" {
-		return fmt.Errorf("--tenant and --namespace are required")
+	if tenant == "" {
+		return nil, fmt.Errorf("--tenant is required")
 	}
 	if token == "" {
 		token = os.Getenv("XC_API_TOKEN")
 	}
 	if token == "" && certFile == "" {
-		return fmt.Errorf("provide --token (or XC_API_TOKEN) or --cert/--key")
+		return nil, fmt.Errorf("provide --token (or XC_API_TOKEN) or --cert/--key")
 	}
 
 	var opts []client.Option
@@ -99,15 +119,36 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		opts = append(opts, client.WithCert(certFile, keyFile))
 	}
 	opts = append(opts, client.WithParallel(parallel))
-	c := client.New(tenant, opts...)
 
+	return client.New(tenant, opts...), nil
+}
+
+// filterResources applies --types and --exclude-types filters to the resource list.
+func filterResources(cmd *cobra.Command) []registry.Resource {
 	resources := registry.All()
-	if len(types) > 0 {
+	if types, _ := cmd.Flags().GetStringSlice("types"); len(types) > 0 {
 		resources = registry.FilterByKinds(resources, types)
 	}
-	if len(excludeTypes) > 0 {
+	if excludeTypes, _ := cmd.Flags().GetStringSlice("exclude-types"); len(excludeTypes) > 0 {
 		resources = registry.ExcludeKinds(resources, excludeTypes)
 	}
+	return resources
+}
+
+func runBackup(cmd *cobra.Command, args []string) error {
+	namespace, _ := cmd.Flags().GetString("namespace")
+	outputDir, _ := cmd.Flags().GetString("output-dir")
+
+	if namespace == "" {
+		return fmt.Errorf("--namespace is required")
+	}
+
+	c, err := buildClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	resources := filterResources(cmd)
 
 	if outputDir == "" {
 		outputDir = fmt.Sprintf("backup-%s-%s", namespace, time.Now().UTC().Format("2006-01-02T15-04-05Z"))
@@ -139,35 +180,19 @@ func runBackup(cmd *cobra.Command, args []string) error {
 }
 
 func runRestore(cmd *cobra.Command, args []string) error {
-	tenant, _ := cmd.Flags().GetString("tenant")
 	namespace, _ := cmd.Flags().GetString("namespace")
-	token, _ := cmd.Flags().GetString("token")
-	certFile, _ := cmd.Flags().GetString("cert")
-	keyFile, _ := cmd.Flags().GetString("key")
-	parallel, _ := cmd.Flags().GetInt("parallel")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	onConflict, _ := cmd.Flags().GetString("on-conflict")
 	types, _ := cmd.Flags().GetStringSlice("types")
 
-	if tenant == "" || namespace == "" {
-		return fmt.Errorf("--tenant and --namespace are required")
-	}
-	if token == "" {
-		token = os.Getenv("XC_API_TOKEN")
-	}
-	if token == "" && certFile == "" {
-		return fmt.Errorf("provide --token (or XC_API_TOKEN) or --cert/--key")
+	if namespace == "" {
+		return fmt.Errorf("--namespace is required")
 	}
 
-	var opts []client.Option
-	if token != "" {
-		opts = append(opts, client.WithToken(token))
+	c, err := buildClient(cmd)
+	if err != nil {
+		return err
 	}
-	if certFile != "" && keyFile != "" {
-		opts = append(opts, client.WithCert(certFile, keyFile))
-	}
-	opts = append(opts, client.WithParallel(parallel))
-	c := client.New(tenant, opts...)
 
 	resources := registry.All()
 	if len(types) > 0 {
@@ -206,34 +231,132 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runDiff(cmd *cobra.Command, args []string) error {
+	namespace, _ := cmd.Flags().GetString("namespace")
+
+	if namespace == "" {
+		return fmt.Errorf("--namespace is required")
+	}
+
+	c, err := buildClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	resources := filterResources(cmd)
+	backupDir := args[0]
+
+	fmt.Printf("Comparing backup %s against live namespace %q on %s\n\n", backupDir, namespace, c.BaseURL())
+
+	report, err := diff.Run(c, &diff.Options{
+		BackupDir: backupDir,
+		Namespace: namespace,
+		Resources: resources,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Drift report:\n")
+	fmt.Printf("  Added (in live, not in backup):    %d\n", len(report.Added))
+	fmt.Printf("  Removed (in backup, not in live):  %d\n", len(report.Removed))
+	fmt.Printf("  Modified:                          %d\n", len(report.Modified))
+	fmt.Printf("  Unchanged:                         %d\n", report.Unchanged)
+
+	if len(report.Added) > 0 {
+		fmt.Printf("\nAdded objects:\n")
+		added := make([]string, len(report.Added))
+		for i, ref := range report.Added {
+			added[i] = ref.Kind + "/" + ref.Name
+		}
+		sort.Strings(added)
+		for _, s := range added {
+			fmt.Printf("  + %s\n", s)
+		}
+	}
+
+	if len(report.Removed) > 0 {
+		fmt.Printf("\nRemoved objects:\n")
+		removed := make([]string, len(report.Removed))
+		for i, ref := range report.Removed {
+			removed[i] = ref.Kind + "/" + ref.Name
+		}
+		sort.Strings(removed)
+		for _, s := range removed {
+			fmt.Printf("  - %s\n", s)
+		}
+	}
+
+	if len(report.Modified) > 0 {
+		fmt.Printf("\nModified objects:\n")
+		for _, mod := range report.Modified {
+			fmt.Printf("  ~ %s/%s\n", mod.Kind, mod.Name)
+			fmt.Println(mod.UnifiedDiff)
+		}
+	}
+
+	printWarnings(report.Warnings)
+	printErrors(report.Errors)
+
+	return nil
+}
+
+func runRevert(cmd *cobra.Command, args []string) error {
+	namespace, _ := cmd.Flags().GetString("namespace")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	deleteExtra, _ := cmd.Flags().GetBool("delete-extra")
+
+	if namespace == "" {
+		return fmt.Errorf("--namespace is required")
+	}
+
+	c, err := buildClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	resources := filterResources(cmd)
+	backupDir := args[0]
+
+	if dryRun {
+		fmt.Println("DRY RUN -- no changes will be made")
+	}
+
+	fmt.Printf("Reverting namespace %q on %s to backup %s\n\n", namespace, c.BaseURL(), backupDir)
+
+	result, _, err := revert.Run(c, &revert.Options{
+		BackupDir:       backupDir,
+		TargetNamespace: namespace,
+		Resources:       resources,
+		DryRun:          dryRun,
+		DeleteExtra:     deleteExtra,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nRevert complete:\n")
+	fmt.Printf("  Replaced: %d\n", result.Replaced)
+	fmt.Printf("  Created:  %d\n", result.Created)
+	fmt.Printf("  Deleted:  %d\n", result.Deleted)
+	fmt.Printf("  Skipped:  %d\n", result.Skipped)
+	fmt.Printf("  Failed:   %d\n", result.Failed)
+
+	printWarnings(result.Warnings)
+	printErrors(result.Errors)
+
+	return nil
+}
+
 func runInspect(cmd *cobra.Command, args []string) error {
 	return inspect.Run(args[0], os.Stdout)
 }
 
 func runNamespaces(cmd *cobra.Command, args []string) error {
-	tenant, _ := cmd.Flags().GetString("tenant")
-	token, _ := cmd.Flags().GetString("token")
-	certFile, _ := cmd.Flags().GetString("cert")
-	keyFile, _ := cmd.Flags().GetString("key")
-
-	if tenant == "" {
-		return fmt.Errorf("--tenant is required")
+	c, err := buildClient(cmd)
+	if err != nil {
+		return err
 	}
-	if token == "" {
-		token = os.Getenv("XC_API_TOKEN")
-	}
-	if token == "" && certFile == "" {
-		return fmt.Errorf("provide --token (or XC_API_TOKEN) or --cert/--key")
-	}
-
-	var opts []client.Option
-	if token != "" {
-		opts = append(opts, client.WithToken(token))
-	}
-	if certFile != "" && keyFile != "" {
-		opts = append(opts, client.WithCert(certFile, keyFile))
-	}
-	c := client.New(tenant, opts...)
 
 	items, err := c.List("/api/web/namespaces")
 	if err != nil {
@@ -241,7 +364,6 @@ func runNamespaces(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, item := range items {
-		// The /api/web/namespaces endpoint returns name at top level, not under metadata
 		if name, ok := item["name"].(string); ok {
 			fmt.Println(name)
 		}

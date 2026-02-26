@@ -136,6 +136,62 @@ func TestClient_Replace(t *testing.T) {
 	}
 }
 
+func TestClient_Delete(t *testing.T) {
+	var gotMethod, gotPath string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	c := &Client{
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+		token:      "test-token",
+		sem:        make(chan struct{}, 10),
+	}
+
+	err := c.Delete("/api/config/namespaces/prod/healthchecks/hc1")
+	if err != nil {
+		t.Fatalf("Delete() error: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/api/config/namespaces/prod/healthchecks/hc1" {
+		t.Errorf("path = %q, want /api/config/namespaces/prod/healthchecks/hc1", gotPath)
+	}
+}
+
+func TestClient_Delete_Error(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"code": 5, "message": "not found"}`))
+	}))
+	defer server.Close()
+
+	c := &Client{
+		baseURL:    server.URL,
+		httpClient: server.Client(),
+		token:      "test-token",
+		sem:        make(chan struct{}, 10),
+	}
+
+	err := c.Delete("/api/config/namespaces/prod/healthchecks/nonexistent")
+	if err == nil {
+		t.Fatal("Delete() should return error for 404")
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error should be *APIError, got %T", err)
+	}
+	if apiErr.StatusCode != 404 {
+		t.Errorf("StatusCode = %d, want 404", apiErr.StatusCode)
+	}
+}
+
 func TestClient_APIError(t *testing.T) {
 	tests := []struct {
 		name           string

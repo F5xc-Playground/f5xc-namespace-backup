@@ -214,3 +214,8 @@ func (c *Client) Replace(path string, obj map[string]any) error {
 	_, _, err = c.do("PUT", path, bytes.NewReader(body))
 	return err
 }
+
+func (c *Client) Delete(path string) error {
+	_, _, err := c.do("DELETE", path, nil)
+	return err
+}
