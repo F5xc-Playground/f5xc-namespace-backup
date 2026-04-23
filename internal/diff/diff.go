@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kevingstewart/xcbackup/internal/client"
-	"github.com/kevingstewart/xcbackup/internal/registry"
-	"github.com/kevingstewart/xcbackup/internal/sanitize"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/sanitize"
 )
 
 // ObjectRef identifies an object by kind and name.
@@ -165,6 +165,11 @@ func Run(c *client.Client, opts *Options) (*DriftReport, error) {
 					mu.Lock()
 					report.Errors = append(report.Errors, fmt.Sprintf("get %s/%s: %v", res.Kind, name, err))
 					mu.Unlock()
+					continue
+				}
+
+				if sanitize.IsViewOwned(obj) {
+					slog.Debug("skipping view-owned object", "kind", res.Kind, "name", name)
 					continue
 				}
 

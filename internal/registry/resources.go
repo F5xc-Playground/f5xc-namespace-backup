@@ -211,7 +211,7 @@ var allResources = []Resource{
 	{Kind: "enhanced-firewall-policy", Domain: "virtual", Tier: 3,
 		ListPath: "/api/config/namespaces/{namespace}/enhanced_firewall_policys"},
 
-	// Service policy set (read-only computed)
+	// Service/network policy sets (read-only; view-owned instances filtered by owner_view at fetch time)
 	{Kind: "service-policy-set", Domain: "network_security", Tier: 3,
 		ListPath: "/api/config/namespaces/{namespace}/service_policy_sets"},
 	{Kind: "network-policy-set", Domain: "network_security", Tier: 3,
@@ -250,6 +250,7 @@ var allResources = []Resource{
 	// Service mesh
 	{Kind: "site-mesh-group", Domain: "service_mesh", Tier: 3,
 		ListPath: "/api/config/namespaces/{namespace}/site_mesh_groups"},
+	// Endpoint (view-owned instances filtered by owner_view at fetch time)
 	{Kind: "endpoint", Domain: "service_mesh", Tier: 3,
 		ListPath: "/api/config/namespaces/{namespace}/endpoints"},
 

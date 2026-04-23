@@ -20,6 +20,7 @@ func TestForBackup(t *testing.T) {
 			"creation_timestamp": "2026-01-01T00:00:00Z",
 			"creator_id":        "user@example.com",
 		},
+		"resource_version": "rv-top-789",
 		"spec": map[string]any{
 			"timeout": float64(3),
 		},
@@ -29,6 +30,9 @@ func TestForBackup(t *testing.T) {
 
 	if _, ok := result["system_metadata"]; ok {
 		t.Error("system_metadata should be removed")
+	}
+	if _, ok := result["resource_version"]; ok {
+		t.Error("top-level resource_version should be removed")
 	}
 	md := result["metadata"].(map[string]any)
 	if _, ok := md["uid"]; ok {
@@ -65,6 +69,75 @@ func TestForBackup_DoesNotMutateOriginal(t *testing.T) {
 	afterJSON, _ := json.Marshal(obj)
 	if string(origJSON) != string(afterJSON) {
 		t.Error("ForBackup should not mutate the original object")
+	}
+}
+
+func TestIsViewOwned(t *testing.T) {
+	tests := []struct {
+		name string
+		obj  map[string]any
+		want bool
+	}{
+		{
+			name: "view-owned object",
+			obj: map[string]any{
+				"system_metadata": map[string]any{
+					"owner_view": map[string]any{
+						"kind":      "http_loadbalancer",
+						"name":      "my-lb",
+						"namespace": "prod",
+						"uid":       "uid-123",
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "standalone object (no owner_view)",
+			obj: map[string]any{
+				"system_metadata": map[string]any{
+					"uid":                "sys-abc",
+					"creation_timestamp": "2026-01-01T00:00:00Z",
+				},
+			},
+			want: false,
+		},
+		{
+			name: "no system_metadata",
+			obj: map[string]any{
+				"metadata": map[string]any{"name": "test"},
+			},
+			want: false,
+		},
+		{
+			name: "empty owner_view (no kind)",
+			obj: map[string]any{
+				"system_metadata": map[string]any{
+					"owner_view": map[string]any{},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "owner_view with non-string kind",
+			obj: map[string]any{
+				"system_metadata": map[string]any{
+					"owner_view": map[string]any{
+						"kind": 42,
+					},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsViewOwned(tt.obj)
+			if got != tt.want {
+				t.Errorf("IsViewOwned() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

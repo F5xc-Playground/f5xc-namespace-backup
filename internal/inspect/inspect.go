@@ -5,7 +5,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/kevingstewart/xcbackup/internal/manifest"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/manifest"
 )
 
 // Run reads a backup directory and prints a summary.

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kevingstewart/xcbackup/internal/client"
-	"github.com/kevingstewart/xcbackup/internal/registry"
-	"github.com/kevingstewart/xcbackup/internal/sanitize"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/sanitize"
 )
 
 type Options struct {

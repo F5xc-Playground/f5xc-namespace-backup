@@ -1,4 +1,4 @@
-module github.com/kevingstewart/xcbackup
+module github.com/F5xc-Playground/f5xc-namespace-backup
 
 go 1.25.7
 

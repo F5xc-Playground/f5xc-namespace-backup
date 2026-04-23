@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kevingstewart/xcbackup/internal/client"
-	"github.com/kevingstewart/xcbackup/internal/diff"
-	"github.com/kevingstewart/xcbackup/internal/registry"
-	"github.com/kevingstewart/xcbackup/internal/sanitize"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/diff"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/sanitize"
 )
 
 // Options configures a revert operation.
@@ -81,6 +81,9 @@ func Run(c *client.Client, opts *Options) (*Result, *diff.DriftReport, error) {
 
 				if opts.DryRun {
 					slog.Info("dry run: would replace", "kind", mod.Kind, "name", mod.Name)
+					mu.Lock()
+					result.Replaced++
+					mu.Unlock()
 					return
 				}
 
@@ -134,6 +137,9 @@ func Run(c *client.Client, opts *Options) (*Result, *diff.DriftReport, error) {
 
 						if opts.DryRun {
 							slog.Info("dry run: would create", "kind", ref.Kind, "name", ref.Name)
+							mu.Lock()
+							result.Created++
+							mu.Unlock()
 							return
 						}
 
@@ -203,6 +209,9 @@ func Run(c *client.Client, opts *Options) (*Result, *diff.DriftReport, error) {
 
 							if opts.DryRun {
 								slog.Info("dry run: would delete", "kind", ref.Kind, "name", ref.Name)
+								mu.Lock()
+								result.Deleted++
+								mu.Unlock()
 								return
 							}
 

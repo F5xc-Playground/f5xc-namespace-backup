@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kevingstewart/xcbackup/internal/backup"
-	"github.com/kevingstewart/xcbackup/internal/client"
-	"github.com/kevingstewart/xcbackup/internal/diff"
-	"github.com/kevingstewart/xcbackup/internal/inspect"
-	"github.com/kevingstewart/xcbackup/internal/registry"
-	"github.com/kevingstewart/xcbackup/internal/restore"
-	"github.com/kevingstewart/xcbackup/internal/revert"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/backup"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/diff"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/inspect"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/restore"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/revert"
 	"github.com/spf13/cobra"
 )
 

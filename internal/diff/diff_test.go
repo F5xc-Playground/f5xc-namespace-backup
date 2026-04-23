@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kevingstewart/xcbackup/internal/client"
-	"github.com/kevingstewart/xcbackup/internal/registry"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
 )
 
 func setupTestBackup(t *testing.T, objects map[string]map[string]map[string]any) string {

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kevingstewart/xcbackup/internal/client"
-	"github.com/kevingstewart/xcbackup/internal/registry"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
 )
 
 func setupTestBackup(t *testing.T, objects map[string]map[string]map[string]any) string {
@@ -283,8 +283,8 @@ func TestRun_DryRun(t *testing.T) {
 	if writes != 0 {
 		t.Errorf("dry run made %d write requests, want 0", writes)
 	}
-	if result.Replaced != 0 {
-		t.Errorf("dry run Replaced = %d, want 0", result.Replaced)
+	if result.Replaced != 1 {
+		t.Errorf("dry run Replaced = %d, want 1 (should count what would be replaced)", result.Replaced)
 	}
 }
 

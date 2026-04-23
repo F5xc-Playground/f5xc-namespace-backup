@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kevingstewart/xcbackup/internal/refs"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/refs"
 )
 
 func TestWriteAndRead(t *testing.T) {

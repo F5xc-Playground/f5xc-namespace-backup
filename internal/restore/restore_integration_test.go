@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kevingstewart/xcbackup/internal/client"
-	"github.com/kevingstewart/xcbackup/internal/client/testutil"
-	"github.com/kevingstewart/xcbackup/internal/manifest"
-	"github.com/kevingstewart/xcbackup/internal/registry"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client/testutil"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/manifest"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
 )
 
 func writeBackupDir(t *testing.T, objects map[string]map[string]map[string]any) string {

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kevingstewart/xcbackup/internal/refs"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/refs"
 )
 
 // Manifest describes a backup's metadata.

@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kevingstewart/xcbackup/internal/manifest"
-	"github.com/kevingstewart/xcbackup/internal/refs"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/manifest"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/refs"
 )
 
 func TestRun_PrintsManifestSummary(t *testing.T) {

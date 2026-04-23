@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kevingstewart/xcbackup/internal/client"
-	"github.com/kevingstewart/xcbackup/internal/manifest"
-	"github.com/kevingstewart/xcbackup/internal/refs"
-	"github.com/kevingstewart/xcbackup/internal/registry"
-	"github.com/kevingstewart/xcbackup/internal/sanitize"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/manifest"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/refs"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/sanitize"
 )
 
 type Options struct {
@@ -131,6 +131,11 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 					mu.Lock()
 					result.Errors = append(result.Errors, fmt.Sprintf("get %s/%s: %v", res.Kind, name, err))
 					mu.Unlock()
+					continue
+				}
+
+				if sanitize.IsViewOwned(obj) {
+					slog.Debug("skipping view-owned object", "kind", res.Kind, "name", name)
 					continue
 				}
 
