@@ -1,52 +1,48 @@
-# xcbackup
+# F5 Distributed Cloud Namespace Backup
 
-Backup and restore F5 Distributed Cloud (XC) namespace configurations.
+A CLI tool that backs up, restores, diffs, and reverts [F5 Distributed Cloud](https://www.f5.com/cloud) namespace configurations. Captures every configuration object in a namespace as individual JSON files, organized by resource type, suitable for version control.
 
-`xcbackup` connects to an F5 XC tenant, enumerates every configuration object in a namespace, and exports them as individual JSON files in a directory tree. The same tool restores from a backup, creating objects in the correct dependency order.
+## Commands
 
-## Features
+| Command | Description |
+|---------|-------------|
+| `backup` | Export all objects in a namespace to a local directory |
+| `restore` | Recreate objects from a backup in dependency order |
+| `diff` | Compare live namespace state against a backup snapshot |
+| `revert` | Push backup state back to the tenant for drifted objects |
+| `inspect` | Display backup metadata and resource counts |
+| `namespaces` | List available namespaces on the tenant |
 
-- **Complete namespace backup** — backs up ~99 namespace-scoped resource types across all domains (load balancers, origin pools, WAF policies, DNS zones, certificates, network policies, and more)
-- **Smart view handling** — automatically skips auto-managed child objects (e.g., virtual hosts created by HTTP load balancers) to prevent conflicts on restore
-- **Dependency-ordered restore** — creates objects in the correct order so that references resolve (healthchecks before origin pools, origin pools before load balancers, etc.)
-- **Shared namespace warnings** — detects cross-namespace references to the `shared` namespace and warns you before restore
-- **Git-friendly output** — one JSON file per object, organized by resource type, easy to diff and track in version control
-- **Flexible auth** — supports both API tokens and mTLS certificates
-- **Selective restore** — restore an entire namespace or individual resource types/objects
-- **Dry run** — preview what a restore would do without making changes
+## Quick Start
 
-## Installation
+### Prerequisites
+
+- Go 1.25+ (to build from source)
+- An F5 XC tenant with an [API token or API certificate](https://docs.cloud.f5.com/docs/how-to/user-mgmt/credentials)
+
+### Install
 
 ```bash
 # From source
-go install github.com/your-org/xcbackup/cmd/xcbackup@latest
+go install github.com/F5xc-Playground/f5xc-namespace-backup/cmd/xcbackup@latest
 
 # Or build locally
-git clone <repo-url>
-cd xcbackup
+git clone https://github.com/F5xc-Playground/f5xc-namespace-backup.git
+cd f5xc-namespace-backup
 make build
+# Binary at ./bin/xcbackup
 ```
-
-## Quick Start
 
 ### Backup a namespace
 
 ```bash
-# Using an API token
 xcbackup backup \
   --tenant acme.console.ves.volterra.io \
   --namespace prod \
   --token "$XC_API_TOKEN"
-
-# Using mTLS certificate
-xcbackup backup \
-  --tenant acme.console.ves.volterra.io \
-  --namespace prod \
-  --cert /path/to/cert.pem \
-  --key /path/to/key.pem
 ```
 
-This creates a timestamped directory with the backup:
+This creates a timestamped directory:
 
 ```
 backup-prod-2026-02-25T13-15-00Z/
@@ -55,13 +51,9 @@ backup-prod-2026-02-25T13-15-00Z/
 │   ├── hc-web.json
 │   └── hc-api.json
 ├── origin-pool/
-│   ├── pool-web.json
-│   └── pool-api.json
+│   └── pool-web.json
 ├── http-loadbalancer/
-│   ├── main-lb.json
-│   └── api-lb.json
-├── app-firewall/
-│   └── default-waf.json
+│   └── main-lb.json
 └── ...
 ```
 
@@ -71,39 +63,39 @@ backup-prod-2026-02-25T13-15-00Z/
 xcbackup inspect ./backup-prod-2026-02-25T13-15-00Z/
 ```
 
-```
-Backup: backup-prod-2026-02-25T13-15-00Z
-Tenant: acme.console.ves.volterra.io
-Namespace: prod
-Timestamp: 2026-02-25T13:15:00Z
-
-Resources:
-  http-loadbalancer:  2
-  origin-pool:        3
-  healthcheck:        2
-  app-firewall:       1
-  service-policy:     4
-  dns-zone:           1
-  ─────────────────────
-  Total:             13
-
-Warnings:
-  ⚠ http-loadbalancer/main-lb references shared/app-firewall/default-waf
-  ⚠ service-policy/api-policy references shared/ip-prefix-set/office-ips
-```
-
-### Restore a namespace
+### Detect drift
 
 ```bash
-# Dry run first
-xcbackup restore \
+xcbackup diff \
   --tenant acme.console.ves.volterra.io \
-  --namespace prod-restored \
+  --namespace prod \
   --token "$XC_API_TOKEN" \
-  --dry-run \
+  ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+Shows added, removed, and modified objects with unified diffs.
+
+### Revert drift
+
+```bash
+# Preview first
+xcbackup revert --dry-run \
+  --tenant acme.console.ves.volterra.io \
+  --namespace prod \
+  --token "$XC_API_TOKEN" \
   ./backup-prod-2026-02-25T13-15-00Z/
 
-# Actual restore
+# Apply
+xcbackup revert \
+  --tenant acme.console.ves.volterra.io \
+  --namespace prod \
+  --token "$XC_API_TOKEN" \
+  ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+### Restore to a new namespace
+
+```bash
 xcbackup restore \
   --tenant acme.console.ves.volterra.io \
   --namespace prod-restored \
@@ -113,136 +105,120 @@ xcbackup restore \
 
 ## Authentication
 
-### API Token
-
-Pass directly or via environment variable:
+**API Token** — pass directly or via environment variable:
 
 ```bash
-# Flag
 xcbackup backup --token "your-api-token" ...
 
-# Environment variable
+# Or
 export XC_API_TOKEN="your-api-token"
 xcbackup backup ...
 ```
 
-To create an API token: F5 XC Console > Administration > Personal Management > Credentials > Add Credentials > API Token.
-
-### mTLS Certificate
+**mTLS Certificate** — pass cert and key paths:
 
 ```bash
-xcbackup backup \
-  --cert /path/to/cert.pem \
-  --key /path/to/key.pem \
-  ...
+xcbackup backup --cert /path/to/cert.pem --key /path/to/key.pem ...
 ```
 
-To create API certificates: F5 XC Console > Administration > Personal Management > Credentials > Add Credentials > API Certificate.
+To create credentials: F5 XC Console → Administration → Personal Management → Credentials.
 
 ## Tenant URL
 
 The `--tenant` flag accepts multiple formats:
 
 ```bash
---tenant acme                                  # just the tenant name
+--tenant acme                                  # tenant name only
 --tenant acme.console.ves.volterra.io          # full hostname
 --tenant https://acme.console.ves.volterra.io  # full URL
 ```
 
-## Options
+## Command Reference
 
-### Backup
+### backup
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tenant` | (required) | F5 XC tenant URL |
-| `--namespace` | (required) | Namespace to back up |
-| `--token` | `$XC_API_TOKEN` | API token |
-| `--cert` | | Path to mTLS certificate |
-| `--key` | | Path to mTLS private key |
-| `--output-dir` | `./backup-{ns}-{timestamp}/` | Output directory |
-| `--parallel` | `10` | Max concurrent API calls |
-| `--types` | (all) | Comma-separated list of resource types to back up |
-| `--exclude-types` | | Comma-separated list of resource types to skip |
-
-### Restore
+```bash
+xcbackup backup [flags]
+```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--tenant` | (required) | Target F5 XC tenant URL |
-| `--namespace` | (required) | Target namespace |
-| `--token` | `$XC_API_TOKEN` | API token |
-| `--cert` | | Path to mTLS certificate |
-| `--key` | | Path to mTLS private key |
+| `--output-dir` | `backup-{ns}-{timestamp}` | Output directory |
+| `--types` | all | Only back up these resource types (comma-separated) |
+| `--exclude-types` | none | Skip these resource types (comma-separated) |
+
+### restore
+
+```bash
+xcbackup restore [backup-dir] [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
 | `--dry-run` | `false` | Preview without making changes |
 | `--on-conflict` | `skip` | Behavior when object exists: `skip`, `overwrite`, or `fail` |
+| `--types` | all | Only restore these resource types |
+
+### diff
+
+```bash
+xcbackup diff [backup-dir] [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--types` | all | Only diff these resource types |
+| `--exclude-types` | none | Skip these resource types |
+
+### revert
+
+```bash
+xcbackup revert [backup-dir] [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | `false` | Preview without making changes |
+| `--delete-extra` | `false` | Delete objects added since backup |
+| `--types` | all | Only revert these resource types |
+| `--exclude-types` | none | Skip these resource types |
+
+### Global flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tenant` | required | F5 XC tenant URL |
+| `--namespace` | required | Target namespace |
+| `--token` | `$XC_API_TOKEN` | API token |
+| `--cert` | | Path to mTLS certificate |
+| `--key` | | Path to mTLS private key |
 | `--parallel` | `10` | Max concurrent API calls |
-| `--types` | (all) | Comma-separated list of resource types to restore |
 
-### Inspect
+## Key Concepts
 
-No additional flags — just pass the backup directory path.
+**Resource coverage** — backs up ~99 namespace-scoped resource types across all domains: load balancers, origin pools, WAF policies, DNS zones, certificates, network policies, service policies, and more.
 
-## How It Works
+**Dependency-ordered restore** — objects are created in tier order so references resolve correctly. Healthchecks before origin pools, origin pools before load balancers, and so on. Deletes happen in reverse tier order.
 
-### Backup Process
+**View handling** — F5 XC "view" objects (like HTTP Load Balancer) auto-create child objects (like Virtual Host). xcbackup skips these children on backup and lets the system recreate them on restore. See [Resource Filtering](docs/resource-filtering.md).
 
-1. Connects to the tenant and validates credentials
-2. Iterates over the built-in registry of ~99 namespace-scoped resource types
-3. Calls the List API for each type in the target namespace
-4. For each object found, calls the Get API to retrieve the full object
-5. Strips system-managed fields (`system_metadata`, `uid`, `resource_version`)
-6. Detects view-managed child objects and skips them (they'll be auto-recreated on restore)
-7. Scans all object references for cross-namespace dependencies on `shared`
-8. Writes each object as `{resource-type}/{name}.json`
-9. Writes `manifest.json` with metadata, resource counts, and warnings
+**Shared namespace** — objects can reference the `shared` namespace, which is visible across all namespaces. xcbackup detects these cross-namespace references and reports them as warnings. Shared objects are not included in the backup.
 
-### Restore Process
-
-1. Reads and validates `manifest.json`
-2. Checks that any referenced `shared` namespace objects exist on the target tenant
-3. Restores objects in dependency order (20 tiers, leaf objects first):
-   - Tier 1: Standalone primitives (healthchecks, IP prefix sets, certificates)
-   - Tier 2: Security policies (WAF, service policies)
-   - Tier 3: Pools and intermediate objects (origin pools)
-   - Tier 4+: Composite/view objects (load balancers, DNS zones)
-4. Within each tier, creates objects in parallel
-5. Reports results: created, skipped (already exists), failed
-
-### View Object Handling
-
-F5 XC "view" objects (like HTTP Load Balancer) automatically create and manage child objects (like Virtual Host, Cluster). `xcbackup` handles this by:
-
-- **On backup:** Detecting and skipping auto-managed children. These are recorded in `manifest.json` under `skipped_view_children`.
-- **On restore:** Only creating the view object. The system automatically recreates the children.
-
-This prevents the "duplicate object" errors that would occur if both a view and its children were restored.
-
-### Shared Namespace References
-
-Objects in your namespace can reference objects in the `shared` namespace (which is visible across all namespaces). `xcbackup` detects these references and:
-
-- **On backup:** Lists them as warnings in `manifest.json` and in the terminal output
-- **On restore:** Verifies the referenced shared objects exist on the target tenant before proceeding. Missing shared references are reported as errors.
-
-The `shared` namespace objects themselves are **not** included in the backup — they're managed separately and may be shared across many namespaces.
-
-## Backup Format
-
-Each backup is a directory containing:
-
-- **`manifest.json`** — backup metadata, resource counts, shared references, warnings
-- **`{resource-type}/{name}.json`** — one file per object, containing `metadata` and `spec`
-
-This format is designed to be checked into git for version tracking and easy diffing between backups.
+**Git-friendly output** — one JSON file per object with server-managed fields stripped. Designed for version control and easy diffing between backups.
 
 ## Limitations
 
-- **Secrets**: Objects containing secrets (e.g., blindfolded values in certificates, cloud credentials) may not be fully restorable. The backup captures the object structure but encrypted/blindfolded values require re-encryption on the target tenant.
-- **Resource versions**: The F5 XC API evolves over time. A backup taken on one API version may need adjustment to restore on a newer version.
-- **View children**: Auto-managed children of view objects are intentionally excluded. If you need to back up non-view child objects, use `--types` to explicitly include them.
-- **System namespace**: Objects in the `system` namespace (sites, fleets) are not backed up — these are infrastructure objects, not application configuration.
+- **Secrets**: Blindfolded values in certificates and cloud credentials may not be fully restorable — they require re-encryption on the target tenant.
+- **View children**: Auto-managed children of view objects are intentionally excluded. Use `--types` to explicitly include them if needed.
+- **System namespace**: Infrastructure objects (sites, fleets) in the `system` namespace are not backed up.
+
+## Documentation
+
+- [Architecture and Backup Format](docs/architecture.md)
+- [Resource Filtering](docs/resource-filtering.md)
+- [Development Guide](docs/development.md)
+- [F5 XC API Reference](https://docs.cloud.f5.com/docs-v2/api)
 
 ## License
 
-[TBD]
+Apache 2.0
