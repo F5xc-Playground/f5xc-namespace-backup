@@ -1,0 +1,509 @@
+# F5 XC Namespace Backup — Complete Operating Guide
+
+This document contains everything needed to install, configure, and use xcbackup to backup, restore, diff, and revert F5 Distributed Cloud namespace configurations.
+
+---
+
+## 1. Installation
+
+### Prerequisites
+
+- Go 1.25+ (to build from source)
+- F5 XC tenant with API token or API certificate
+
+### Install
+
+```bash
+# From source
+go install github.com/F5xc-Playground/f5xc-namespace-backup/cmd/xcbackup@latest
+
+# Or build locally
+git clone https://github.com/F5xc-Playground/f5xc-namespace-backup.git
+cd f5xc-namespace-backup
+make build
+# Binary at ./bin/xcbackup
+```
+
+---
+
+## 2. Authentication
+
+### API Token
+
+```bash
+# Via flag
+xcbackup backup --token "your-api-token" ...
+
+# Via environment variable
+export XC_API_TOKEN="your-api-token"
+xcbackup backup ...
+```
+
+Create tokens at: F5 XC Console → Administration → Personal Management → Credentials → Add Credentials → API Token.
+
+### mTLS Certificate
+
+```bash
+xcbackup backup --cert /path/to/cert.pem --key /path/to/key.pem ...
+```
+
+Create certificates at: F5 XC Console → Administration → Personal Management → Credentials → Add Credentials → API Certificate.
+
+### Tenant URL
+
+The `--tenant` flag accepts multiple formats:
+
+```bash
+--tenant acme                                  # tenant name only
+--tenant acme.console.ves.volterra.io          # full hostname
+--tenant https://acme.console.ves.volterra.io  # full URL
+```
+
+All forms are normalized to `https://{name}.console.ves.volterra.io`.
+
+---
+
+## 3. Commands
+
+### 3.1 backup
+
+Export all objects in a namespace to a local directory.
+
+```bash
+xcbackup backup \
+  --tenant acme.console.ves.volterra.io \
+  --namespace prod \
+  --token "$XC_API_TOKEN"
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output-dir` | `backup-{ns}-{timestamp}` | Output directory |
+| `--types` | all | Only back up these resource types (comma-separated) |
+| `--exclude-types` | none | Skip these resource types (comma-separated) |
+
+The backup process:
+1. Connects to tenant and validates credentials
+2. Iterates over the registry of 99 namespace-scoped resource types
+3. Lists each type in the target namespace (concurrent, limited by `--parallel`)
+4. Filters out cross-namespace objects and view-managed children
+5. Strips server-managed fields (system_metadata, uid, resource_version, status)
+6. Detects shared namespace references and reports warnings
+7. Writes each object as `{resource-type}/{name}.json`
+8. Writes `manifest.json` with metadata and resource counts
+
+Output structure:
+
+```
+backup-prod-2026-02-25T13-15-00Z/
+├── manifest.json
+├── healthcheck/
+│   ├── hc-web.json
+│   └── hc-api.json
+├── origin-pool/
+│   └── pool-web.json
+├── http-loadbalancer/
+│   └── main-lb.json
+└── ...
+```
+
+Object files contain `metadata` and `spec` only. Server-managed fields are stripped so that backup-to-live diffs show only meaningful configuration changes.
+
+### 3.2 inspect
+
+Display backup metadata and resource counts.
+
+```bash
+xcbackup inspect ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+Output:
+
+```
+Backup: backup-prod-2026-02-25T13-15-00Z
+Tenant: acme.console.ves.volterra.io
+Namespace: prod
+Timestamp: 2026-02-25T13:15:00Z
+
+Resources:
+  http-loadbalancer:  2
+  origin-pool:        3
+  healthcheck:        2
+  app-firewall:       1
+  ─────────────────────
+  Total:              8
+
+Warnings:
+  ⚠ http-loadbalancer/main-lb references shared/app-firewall/default-waf
+```
+
+### 3.3 diff
+
+Compare live namespace state against a backup snapshot.
+
+```bash
+xcbackup diff \
+  --tenant acme.console.ves.volterra.io \
+  --namespace prod \
+  --token "$XC_API_TOKEN" \
+  ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--types` | all | Only diff these resource types |
+| `--exclude-types` | none | Skip these resource types |
+
+Reports four categories:
+- **Added**: objects in live that aren't in the backup
+- **Removed**: objects in the backup that aren't in live
+- **Modified**: objects in both but with spec differences (shown as unified diffs)
+- **Unchanged**: objects that match exactly
+
+### 3.4 revert
+
+Push backup state back to the tenant for drifted objects.
+
+```bash
+# Preview first
+xcbackup revert --dry-run \
+  --tenant acme.console.ves.volterra.io \
+  --namespace prod \
+  --token "$XC_API_TOKEN" \
+  ./backup-prod-2026-02-25T13-15-00Z/
+
+# Apply
+xcbackup revert \
+  --tenant acme.console.ves.volterra.io \
+  --namespace prod \
+  --token "$XC_API_TOKEN" \
+  ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | `false` | Preview without making changes |
+| `--delete-extra` | `false` | Delete objects added since backup |
+| `--types` | all | Only revert these resource types |
+| `--exclude-types` | none | Skip these resource types |
+
+Revert runs a diff, then:
+- **Modified** objects are replaced (PUT) in parallel
+- **Removed** objects are recreated (POST) in tier order (dependencies first)
+- **Added** objects are deleted (DELETE) in reverse tier order (only with `--delete-extra`)
+
+### 3.5 restore
+
+Recreate objects from a backup in a target namespace.
+
+```bash
+xcbackup restore \
+  --tenant acme.console.ves.volterra.io \
+  --namespace prod-restored \
+  --token "$XC_API_TOKEN" \
+  ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | `false` | Preview without making changes |
+| `--on-conflict` | `skip` | Behavior when object exists: `skip`, `overwrite`, or `fail` |
+| `--types` | all | Only restore these resource types |
+
+Restore process:
+1. Reads and validates manifest.json
+2. Restores in dependency order across 5 tiers (tier 1 first, tier 5 skipped)
+3. Within each tier, creates objects in parallel
+4. Reports: created, skipped, updated, failed
+
+### 3.6 namespaces
+
+List available namespaces on the tenant.
+
+```bash
+xcbackup namespaces \
+  --tenant acme.console.ves.volterra.io \
+  --token "$XC_API_TOKEN"
+```
+
+### Global Flags
+
+These flags apply to all commands that connect to the API (backup, restore, diff, revert, namespaces):
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tenant` | required | F5 XC tenant URL |
+| `--namespace` | required | Target namespace |
+| `--token` | `$XC_API_TOKEN` | API token |
+| `--cert` | | Path to mTLS certificate |
+| `--key` | | Path to mTLS private key |
+| `--parallel` | `10` | Max concurrent API calls |
+
+---
+
+## 4. Resource Registry
+
+xcbackup knows about 99 namespace-scoped resource types organized in 5 dependency tiers.
+
+### Tier 1 — Standalone Primitives (37 types)
+
+No dependencies on other namespace-scoped objects. Created first, deleted last.
+
+Types: certificate, certificate-chain, trusted-ca-list, crl, ip-prefix-set, geo-location-set, virtual-network, healthcheck, app-firewall, protocol-inspection, rate-limiter, policer, protocol-policer, user-identification, data-type, sensitive-data-policy, bigip-irule, data-group, virtual-site, cloud-credentials, secret-policy, secret-policy-rule, secret-management-access, voltshare-admin-policy, alert-receiver, alert-policy, global-log-receiver, log-receiver, malicious-user-mitigation, workload-flavor, k8s-cluster-role, k8s-pod-security-admission, k8s-pod-security-policy, infraprotect-asn-prefix, infraprotect-firewall-rule, app-setting, app-type
+
+### Tier 2 — References Tier 1 (27 types)
+
+May reference tier 1 objects. Example: origin-pool references healthcheck.
+
+Types: origin-pool, service-policy, service-policy-rule, network-policy, network-policy-rule, network-firewall, fast-acl-rule, filter-set, segment, nat-policy, policy-based-routing, rate-limiter-policy, waf-exclusion-policy, route, network-connector, bgp-routing-policy, advertise-policy, srv6-network-slice, dc-cluster-group, k8s-cluster-role-binding, infraprotect-firewall-rule-group, infraprotect-internet-prefix-advertisement, api-definition, app-api-group, external-connector, addon-subscription, nginx-service-discovery
+
+### Tier 3 — Higher-Level Policies (25 types)
+
+Reference tier 1 and 2 objects. Example: dns-zone references dns-lb-pool.
+
+Types: network-policy-view, forward-proxy-policy, fast-acl, enhanced-firewall-policy, service-policy-set, network-policy-set, dns-zone, dns-domain, dns-lb-health-check, dns-lb-pool, dns-load-balancer, dns-compliance-checks, api-discovery, api-crawler, api-testing, discovery, bot-defense-app-infrastructure, protected-application, site-mesh-group, endpoint, cloud-connect, cloud-elastic-ip, cloud-link, network-interface, usb-policy
+
+### Tier 4 — Top-Level View Objects (7 types)
+
+Composite objects that auto-create children. Created last, deleted first.
+
+Types: http-loadbalancer, tcp-loadbalancer, udp-loadbalancer, cdn-loadbalancer, virtual-k8s, workload, k8s-cluster
+
+### Tier 5 — View-Managed Children (3 types)
+
+Always auto-created by their parent view object. Skipped entirely during backup and restore.
+
+Types: virtual-host (managed by http-loadbalancer), cluster (managed by origin-pool), proxy (managed by http-loadbalancer)
+
+---
+
+## 5. Resource Filtering
+
+Three filtering layers prevent backing up objects that shouldn't be included.
+
+### Layer 1: Registry-Level (`ManagedBy`)
+
+Resource types marked with `ManagedBy` in the registry are skipped entirely — no API calls made. This covers tier 5 types that are always view-managed: virtual-host, cluster, proxy.
+
+### Layer 2: Object-Level (`system_metadata.owner_view`)
+
+Some resource types contain a mix of standalone and view-managed objects. For example, `route` can be created manually but HTTP load balancers also auto-create routes.
+
+The API marks auto-created objects with:
+
+```json
+{
+  "system_metadata": {
+    "owner_view": {
+      "kind": "http_loadbalancer",
+      "name": "my-lb"
+    }
+  }
+}
+```
+
+Objects with a populated `owner_view.kind` are skipped during backup and diff.
+
+Affected types: route, advertise-policy, endpoint, service-policy-set, network-policy-set.
+
+### Layer 3: Namespace-Level
+
+The F5 XC list API may return objects from the `shared` or `system` namespaces alongside target namespace objects. Objects whose `namespace` field doesn't match the target are skipped.
+
+### Field Sanitization
+
+After filtering, these server-managed fields are stripped from backed-up objects:
+
+- `system_metadata` (entire block)
+- `resource_version`
+- `status`
+- `referring_objects`
+- `deleted_referred_objects`
+- `disabled_referred_objects`
+- `create_form`
+- `replace_form`
+- `metadata.uid`
+- `metadata.resource_version`
+
+---
+
+## 6. Backup Format
+
+### manifest.json
+
+```json
+{
+  "version": "1",
+  "tenant": "https://acme.console.ves.volterra.io",
+  "namespace": "prod",
+  "timestamp": "2026-02-25T13:15:00Z",
+  "resource_counts": {
+    "healthcheck": 2,
+    "origin-pool": 1,
+    "http-loadbalancer": 1
+  }
+}
+```
+
+### Object Files
+
+Each object is stored as `{resource-type}/{name}.json` with `metadata` and `spec`:
+
+```json
+{
+  "metadata": {
+    "name": "hc-web",
+    "namespace": "prod"
+  },
+  "spec": {
+    "http_health_check": {
+      "path": "/healthz"
+    },
+    "timeout": 3,
+    "interval": 15,
+    "unhealthy_threshold": 3,
+    "healthy_threshold": 1
+  }
+}
+```
+
+The backup format is designed for version control — one file per object, server-managed fields stripped, organized by resource type.
+
+---
+
+## 7. Shared Namespace
+
+Objects in a namespace can reference objects in the `shared` namespace (visible across all namespaces). Common shared types: app-firewall, healthcheck, service-policy, certificate, ip-prefix-set.
+
+xcbackup detects cross-namespace references:
+- **On backup**: reports them as warnings in manifest.json and terminal output
+- **On diff/revert**: shared objects are excluded from comparison (they're not in the backup)
+
+Shared namespace objects are never included in the backup — they're managed separately and may be referenced by many namespaces.
+
+---
+
+## 8. Common Workflows
+
+### Backup and version control
+
+```bash
+# Initial backup
+xcbackup backup --tenant acme --namespace prod --token "$XC_API_TOKEN"
+
+# Commit to git
+cd backup-prod-*
+git init && git add . && git commit -m "initial backup"
+```
+
+### Detect configuration drift
+
+```bash
+xcbackup diff --tenant acme --namespace prod --token "$XC_API_TOKEN" \
+  ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+### Revert unauthorized changes
+
+```bash
+# Preview
+xcbackup revert --dry-run --tenant acme --namespace prod \
+  --token "$XC_API_TOKEN" ./backup-prod-2026-02-25T13-15-00Z/
+
+# Apply
+xcbackup revert --tenant acme --namespace prod \
+  --token "$XC_API_TOKEN" ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+### Clone a namespace
+
+```bash
+# Backup source
+xcbackup backup --tenant acme --namespace prod --token "$XC_API_TOKEN"
+
+# Restore to new namespace
+xcbackup restore --tenant acme --namespace staging \
+  --token "$XC_API_TOKEN" ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+### Selective backup/restore
+
+```bash
+# Back up only load balancers and their dependencies
+xcbackup backup --tenant acme --namespace prod --token "$XC_API_TOKEN" \
+  --types healthcheck,origin-pool,http-loadbalancer
+
+# Restore only healthchecks
+xcbackup restore --tenant acme --namespace prod-restored \
+  --token "$XC_API_TOKEN" --types healthcheck \
+  ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+### Migrate between tenants
+
+```bash
+# Backup from source tenant
+xcbackup backup --tenant source-tenant --namespace prod \
+  --token "$SOURCE_TOKEN"
+
+# Restore to destination tenant
+xcbackup restore --tenant dest-tenant --namespace prod \
+  --token "$DEST_TOKEN" ./backup-prod-2026-02-25T13-15-00Z/
+```
+
+---
+
+## 9. Limitations and Constraints
+
+1. **Secrets**: Blindfolded values in certificates and cloud credentials may not be fully restorable. They require re-encryption on the target tenant.
+2. **View children**: Auto-managed children (virtual-host, cluster, proxy) are intentionally excluded. Use `--types` to explicitly include them if needed.
+3. **System namespace**: Infrastructure objects (sites, fleets) in the system namespace are not backed up — these are infrastructure, not application configuration.
+4. **Shared references**: If a backup references shared objects that don't exist on the target tenant, restore will fail for those objects. Ensure shared dependencies exist first.
+5. **API versions**: A backup taken on one API version may need adjustment to restore on a newer version if field schemas have changed.
+6. **Concurrent access**: Backup is a point-in-time snapshot. If objects are modified during backup, the snapshot may be inconsistent. Use `--parallel 1` for strict consistency.
+
+---
+
+## 10. F5 XC REST API Patterns
+
+xcbackup interacts with the F5 XC REST API using these patterns:
+
+| Operation | Method | Path |
+|-----------|--------|------|
+| List | GET | `/api/config/namespaces/{ns}/{resource}` |
+| Get | GET | `/api/config/namespaces/{ns}/{resource}/{name}` |
+| Create | POST | `/api/config/namespaces/{ns}/{resource}` |
+| Replace | PUT | `/api/config/namespaces/{ns}/{resource}/{name}` |
+| Delete | DELETE | `/api/config/namespaces/{ns}/{resource}/{name}` |
+| List namespaces | GET | `/api/web/namespaces` |
+
+Authentication: `Authorization: APIToken {token}` header.
+
+List responses return `{"items": [...]}` where each item has top-level `name` and `namespace` fields alongside nested `metadata`, `system_metadata`, and `spec`.
+
+Get responses return `{"metadata": {...}, "system_metadata": {...}, "spec": {...}}` without top-level name/namespace fields.
+
+Error responses return structured JSON with HTTP status codes: 401 (auth failure), 403 (forbidden), 404 (not found), 409 (conflict), 429 (rate limited), 500 (server error), 501 (not implemented).
+
+---
+
+## 11. Project Structure
+
+```
+cmd/xcbackup/           CLI entry point (Cobra commands)
+internal/
+  backup/               Backup orchestration
+  restore/              Restore orchestration with tier ordering
+  diff/                 Drift detection with unified diff output
+  revert/               Smart rollback (replace, recreate, delete)
+  client/               F5 XC REST API client (token + mTLS auth)
+  client/testutil/      FakeXCServer for integration testing
+  registry/             Resource type registry (99 types, 5 tiers)
+  manifest/             Manifest read/write
+  refs/                 Shared namespace reference detection
+  inspect/              Backup inspection and reporting
+  sanitize/             Field stripping for backup and restore
+```
+
+Module: `github.com/F5xc-Playground/f5xc-namespace-backup`
+Dependencies: Go stdlib + github.com/spf13/cobra

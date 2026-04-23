@@ -217,6 +217,7 @@ xcbackup revert [backup-dir] [flags]
 - [Architecture and Backup Format](docs/architecture.md)
 - [Resource Filtering](docs/resource-filtering.md)
 - [Development Guide](docs/development.md)
+- [LLM/Agent Operating Guide](llms-full.txt)
 - [F5 XC API Reference](https://docs.cloud.f5.com/docs-v2/api)
 
 ## License

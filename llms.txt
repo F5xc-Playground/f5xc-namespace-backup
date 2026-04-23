@@ -1,0 +1,25 @@
+# F5 XC Namespace Backup (xcbackup)
+
+> CLI tool to backup, restore, diff, and revert F5 Distributed Cloud namespace configurations. Captures ~99 namespace-scoped resource types as individual JSON files with dependency-ordered restore.
+
+## Documentation
+
+- [README](https://github.com/F5xc-Playground/f5xc-namespace-backup/blob/main/README.md): Installation, quick start, command reference, authentication
+- [Architecture](https://github.com/F5xc-Playground/f5xc-namespace-backup/blob/main/docs/architecture.md): Backup/restore process, tier ordering, backup format, project structure
+- [Resource Filtering](https://github.com/F5xc-Playground/f5xc-namespace-backup/blob/main/docs/resource-filtering.md): Three-layer filtering (registry, object-level, namespace-level)
+- [Development](https://github.com/F5xc-Playground/f5xc-namespace-backup/blob/main/docs/development.md): Prerequisites, testing, project structure
+- [Full LLM Guide](https://github.com/F5xc-Playground/f5xc-namespace-backup/blob/main/llms-full.txt): Complete operating reference for AI agents
+
+## Commands
+
+- `xcbackup backup`: Export all objects in a namespace to a local directory
+- `xcbackup restore`: Recreate objects from a backup in dependency order
+- `xcbackup diff`: Compare live namespace state against a backup snapshot
+- `xcbackup revert`: Push backup state back to the tenant for drifted objects
+- `xcbackup inspect`: Display backup metadata and resource counts
+- `xcbackup namespaces`: List available namespaces on the tenant
+
+## API
+
+- [F5 XC API Reference](https://docs.cloud.f5.com/docs-v2/api): Upstream API documentation
+- [F5 XC Credentials](https://docs.cloud.f5.com/docs/how-to/user-mgmt/credentials): How to create API tokens and certificates
