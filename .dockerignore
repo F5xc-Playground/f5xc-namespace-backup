@@ -1,0 +1,7 @@
+bin/
+backup-*/
+docs/
+*.md
+LICENSE
+.git
+.github

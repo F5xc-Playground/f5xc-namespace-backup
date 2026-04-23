@@ -31,6 +31,9 @@ git clone https://github.com/F5xc-Playground/f5xc-namespace-backup.git
 cd f5xc-namespace-backup
 make build
 # Binary at ./bin/xcbackup
+
+# Or pull the container
+docker pull ghcr.io/f5xc-playground/xcbackup:latest
 ```
 
 ### Backup a namespace
