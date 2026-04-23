@@ -54,7 +54,7 @@ func TestContract_CRUD_Healthcheck(t *testing.T) {
 	obj := map[string]any{
 		"metadata": map[string]any{"name": name, "namespace": ns},
 		"spec": map[string]any{
-			"http_health_check":   map[string]any{},
+			"http_health_check":   map[string]any{"path": "/healthz"},
 			"timeout":             3,
 			"interval":            15,
 			"unhealthy_threshold": 3,
