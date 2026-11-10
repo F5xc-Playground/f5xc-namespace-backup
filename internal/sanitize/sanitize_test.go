@@ -18,7 +18,7 @@ func TestForBackup(t *testing.T) {
 		"system_metadata": map[string]any{
 			"uid":                "sys-abc",
 			"creation_timestamp": "2026-01-01T00:00:00Z",
-			"creator_id":        "user@example.com",
+			"creator_id":         "user@example.com",
 		},
 		"resource_version": "rv-top-789",
 		"spec": map[string]any{
@@ -151,7 +151,7 @@ func TestForRestore(t *testing.T) {
 		"spec": map[string]any{"timeout": float64(3)},
 	}
 
-	result := ForRestore(obj, "staging")
+	result, _ := ForRestore(obj, "prod", "staging")
 
 	md := result["metadata"].(map[string]any)
 	if md["namespace"] != "staging" {
@@ -159,5 +159,61 @@ func TestForRestore(t *testing.T) {
 	}
 	if md["name"] != "hc1" {
 		t.Error("ForRestore should preserve name")
+	}
+}
+
+func TestForRestore_RetargetsSameNamespaceRefs(t *testing.T) {
+	obj := map[string]any{
+		"metadata": map[string]any{"name": "lb1", "namespace": "prod"},
+		"spec": map[string]any{
+			"app_firewall": map[string]any{"name": "waf1", "namespace": "prod", "tenant": "acme-abc"},
+			"default_route_pools": []any{
+				map[string]any{"pool": map[string]any{"name": "pool1", "namespace": "prod"}, "weight": float64(1)},
+				map[string]any{"pool": map[string]any{"name": "pool2", "namespace": "shared"}, "weight": float64(1)},
+			},
+			"note": map[string]any{"namespace": "prod"},
+		},
+	}
+
+	result, n := ForRestore(obj, "prod", "staging")
+
+	if n != 2 {
+		t.Errorf("retargeted = %d, want 2", n)
+	}
+	spec := result["spec"].(map[string]any)
+	if got := spec["app_firewall"].(map[string]any)["namespace"]; got != "staging" {
+		t.Errorf("app_firewall namespace = %v, want staging", got)
+	}
+	if got := spec["app_firewall"].(map[string]any)["tenant"]; got != "acme-abc" {
+		t.Errorf("app_firewall tenant = %v, want unchanged", got)
+	}
+	pools := spec["default_route_pools"].([]any)
+	if got := pools[0].(map[string]any)["pool"].(map[string]any)["namespace"]; got != "staging" {
+		t.Errorf("pool1 namespace = %v, want staging", got)
+	}
+	if got := pools[1].(map[string]any)["pool"].(map[string]any)["namespace"]; got != "shared" {
+		t.Errorf("shared ref namespace = %v, want shared", got)
+	}
+	if got := spec["note"].(map[string]any)["namespace"]; got != "prod" {
+		t.Errorf("map without name changed to %v, want prod", got)
+	}
+	if got := obj["spec"].(map[string]any)["app_firewall"].(map[string]any)["namespace"]; got != "prod" {
+		t.Errorf("original mutated: %v", got)
+	}
+}
+
+func TestForRestore_NoRetargetWhenSourceUnknownOrSame(t *testing.T) {
+	obj := map[string]any{
+		"metadata": map[string]any{"name": "lb1", "namespace": "prod"},
+		"spec":     map[string]any{"pool": map[string]any{"name": "p", "namespace": "prod"}},
+	}
+	for _, src := range []string{"", "staging"} {
+		result, n := ForRestore(obj, src, "staging")
+		if n != 0 {
+			t.Errorf("source %q: retargeted = %d, want 0", src, n)
+		}
+		if got := result["spec"].(map[string]any)["pool"].(map[string]any)["namespace"]; got != "prod" {
+			t.Errorf("source %q: namespace = %v, want prod", src, got)
+		}
 	}
 }

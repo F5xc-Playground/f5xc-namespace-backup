@@ -209,12 +209,17 @@ xcbackup restore \
 | `--dry-run` | `false` | Preview without making changes |
 | `--on-conflict` | `skip` | Behavior when object exists: `skip`, `overwrite`, or `fail` |
 | `--types` | all | Only restore these resource types |
+| `--json` | `false` | Print one JSON result object on stdout instead of text |
 
 Restore process:
-1. Reads and validates manifest.json
+1. Reads manifest.json; its namespace is used to retarget references between backed-up objects to `--namespace`
+   (references to `shared` are unchanged)
 2. Restores in dependency order across 5 tiers (tier 1 first, tier 5 skipped)
 3. Within each tier, creates objects in parallel
-4. Reports: created, skipped, updated, failed
+4. Reports: created, skipped, updated, failed, retargeted
+
+Exit codes for all commands: 0 success, 1 fatal error, 2 finished with failed objects or resource types.
+`backup --json` and `restore --json` print a single JSON object on stdout with `ok`, counts, `warnings` and `errors`.
 
 ### 3.6 namespaces
 

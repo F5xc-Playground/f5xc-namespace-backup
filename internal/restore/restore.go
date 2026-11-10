@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/client"
+	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/manifest"
 	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/registry"
 	"github.com/F5xc-Playground/f5xc-namespace-backup/internal/sanitize"
 )
@@ -28,6 +29,7 @@ type Result struct {
 	Skipped    int
 	Updated    int
 	Failed     int
+	Retargeted int // spec references moved from the backup's namespace to the target
 	Errors     []string
 	Warnings   []string
 	AuthFailed bool
@@ -35,6 +37,15 @@ type Result struct {
 
 func Run(c *client.Client, opts *Options) (*Result, error) {
 	result := &Result{}
+
+	// The backup's own namespace, so references between its objects can follow
+	// them into the target namespace. Without a manifest, references are left as is.
+	sourceNamespace := ""
+	if m, err := manifest.Read(opts.BackupDir); err == nil {
+		sourceNamespace = m.Namespace
+	} else {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("no readable manifest, references not retargeted: %v", err))
+	}
 
 	// Filter to standalone resources that have backup files
 	var resources []registry.Resource
@@ -104,7 +115,7 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 						continue
 					}
 
-					restored := sanitize.ForRestore(obj, opts.TargetNamespace)
+					restored, retargeted := sanitize.ForRestore(obj, sourceNamespace, opts.TargetNamespace)
 					listPath := strings.ReplaceAll(res.ListPath, "{namespace}", opts.TargetNamespace)
 					getPath := listPath + "/" + name
 
@@ -130,6 +141,7 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 							}
 							mu.Lock()
 							result.Updated++
+							result.Retargeted += retargeted
 							mu.Unlock()
 							slog.Info("updated", "kind", res.Kind, "name", name)
 							continue
@@ -163,6 +175,7 @@ func Run(c *client.Client, opts *Options) (*Result, error) {
 
 					mu.Lock()
 					result.Created++
+					result.Retargeted += retargeted
 					mu.Unlock()
 					slog.Info("created", "kind", res.Kind, "name", name)
 				}

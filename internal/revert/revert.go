@@ -87,7 +87,7 @@ func Run(c *client.Client, opts *Options) (*Result, *diff.DriftReport, error) {
 					return
 				}
 
-				restored := sanitize.ForRestore(mod.BackupObj, opts.TargetNamespace)
+				restored, _ := sanitize.ForRestore(mod.BackupObj, "", opts.TargetNamespace)
 				if err := c.Replace(getPath, restored); err != nil {
 					mu.Lock()
 					result.Errors = append(result.Errors, fmt.Sprintf("replace %s/%s: %v", mod.Kind, mod.Name, err))
@@ -152,7 +152,7 @@ func Run(c *client.Client, opts *Options) (*Result, *diff.DriftReport, error) {
 							return
 						}
 
-						restored := sanitize.ForRestore(backupObj, opts.TargetNamespace)
+						restored, _ := sanitize.ForRestore(backupObj, "", opts.TargetNamespace)
 						if err := c.Create(listPath, restored); err != nil {
 							mu.Lock()
 							result.Errors = append(result.Errors, fmt.Sprintf("create %s/%s: %v", ref.Kind, ref.Name, err))

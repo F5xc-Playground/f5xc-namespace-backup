@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -42,6 +45,7 @@ func main() {
 	backupCmd.Flags().String("output-dir", "", "Output directory (default: backup-{ns}-{timestamp})")
 	backupCmd.Flags().StringSlice("types", nil, "Only back up these resource types")
 	backupCmd.Flags().StringSlice("exclude-types", nil, "Skip these resource types")
+	backupCmd.Flags().Bool("json", false, "Print one JSON result object on stdout instead of text")
 
 	restoreCmd := &cobra.Command{
 		Use:   "restore [backup-dir]",
@@ -52,6 +56,7 @@ func main() {
 	restoreCmd.Flags().Bool("dry-run", false, "Preview without making changes")
 	restoreCmd.Flags().String("on-conflict", "skip", "Behavior when object exists: skip, overwrite, fail")
 	restoreCmd.Flags().StringSlice("types", nil, "Only restore these resource types")
+	restoreCmd.Flags().Bool("json", false, "Print one JSON result object on stdout instead of text")
 
 	diffCmd := &cobra.Command{
 		Use:   "diff [backup-dir]",
@@ -89,8 +94,132 @@ func main() {
 	rootCmd.AddCommand(backupCmd, restoreCmd, diffCmd, revertCmd, inspectCmd, namespacesCmd)
 
 	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
+}
+
+// partialError means a command ran to the end but some objects failed.
+// It exits with code 2, so callers can tell it from a fatal error (code 1).
+type partialError struct {
+	failed int
+}
+
+func (e *partialError) Error() string {
+	return fmt.Sprintf("%d object(s) failed", e.failed)
+}
+
+// partial returns a partialError for failed > 0 and stops cobra printing
+// usage for it, since the command line was valid.
+func partial(cmd *cobra.Command, failed int) error {
+	if failed == 0 {
+		return nil
+	}
+	cmd.SilenceUsage = true
+	return &partialError{failed: failed}
+}
+
+// exitCode maps a command error to the process exit code:
+// 0 success, 1 fatal error, 2 completed with failed objects.
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var p *partialError
+	if errors.As(err, &p) {
+		return 2
+	}
+	return 1
+}
+
+// nonNil keeps empty lists as [] rather than null in JSON output.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+type backupReport struct {
+	OK             bool           `json:"ok"`
+	OutputDir      string         `json:"output_dir"`
+	ObjectCount    int            `json:"object_count"`
+	ResourceCounts map[string]int `json:"resource_counts"`
+	Warnings       []string       `json:"warnings"`
+	Errors         []string       `json:"errors"`
+}
+
+// reportBackup prints the backup result and returns a partialError if any
+// type or object could not be read.
+func reportBackup(w io.Writer, asJSON bool, outputDir string, r *backup.Result) error {
+	failed := len(r.Errors)
+	if asJSON {
+		counts := r.ResourceCounts
+		if counts == nil {
+			counts = map[string]int{}
+		}
+		if err := writeJSON(w, backupReport{
+			OK: failed == 0, OutputDir: outputDir, ObjectCount: r.ObjectCount,
+			ResourceCounts: counts, Warnings: nonNil(r.Warnings), Errors: nonNil(r.Errors),
+		}); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(w, "\nBackup complete: %d objects\n", r.ObjectCount)
+		for kind, count := range r.ResourceCounts {
+			fmt.Fprintf(w, "  %-30s %d\n", kind, count)
+		}
+		printWarnings(w, r.Warnings)
+		printErrors(w, r.Errors)
+	}
+	if failed > 0 {
+		return &partialError{failed: failed}
+	}
+	return nil
+}
+
+type restoreReport struct {
+	OK         bool     `json:"ok"`
+	Created    int      `json:"created"`
+	Updated    int      `json:"updated"`
+	Skipped    int      `json:"skipped"`
+	Failed     int      `json:"failed"`
+	Retargeted int      `json:"retargeted"`
+	Warnings   []string `json:"warnings"`
+	Errors     []string `json:"errors"`
+}
+
+// reportRestore prints the restore result and returns a partialError if any
+// object failed.
+func reportRestore(w io.Writer, asJSON bool, r *restore.Result) error {
+	if asJSON {
+		if err := writeJSON(w, restoreReport{
+			OK: r.Failed == 0, Created: r.Created, Updated: r.Updated, Skipped: r.Skipped, Failed: r.Failed,
+			Retargeted: r.Retargeted, Warnings: nonNil(r.Warnings), Errors: nonNil(r.Errors),
+		}); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintf(w, "\nRestore complete:\n")
+		fmt.Fprintf(w, "  Created:  %d\n", r.Created)
+		fmt.Fprintf(w, "  Updated:  %d\n", r.Updated)
+		fmt.Fprintf(w, "  Skipped:  %d\n", r.Skipped)
+		fmt.Fprintf(w, "  Failed:   %d\n", r.Failed)
+		if r.Retargeted > 0 {
+			fmt.Fprintf(w, "  Retargeted references: %d\n", r.Retargeted)
+		}
+		printWarnings(w, r.Warnings)
+		printErrors(w, r.Errors)
+	}
+	if r.Failed > 0 {
+		return &partialError{failed: r.Failed}
+	}
+	return nil
+}
+
+func writeJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
 
 // buildClient creates an API client from common CLI flags.
@@ -138,6 +267,7 @@ func filterResources(cmd *cobra.Command) []registry.Resource {
 func runBackup(cmd *cobra.Command, args []string) error {
 	namespace, _ := cmd.Flags().GetString("namespace")
 	outputDir, _ := cmd.Flags().GetString("output-dir")
+	asJSON, _ := cmd.Flags().GetBool("json")
 
 	if namespace == "" {
 		return fmt.Errorf("--namespace is required")
@@ -157,8 +287,10 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating output directory: %w", err)
 	}
 
-	fmt.Printf("Backing up namespace %q from %s\n", namespace, c.BaseURL())
-	fmt.Printf("Output: %s\n\n", outputDir)
+	if !asJSON {
+		fmt.Printf("Backing up namespace %q from %s\n", namespace, c.BaseURL())
+		fmt.Printf("Output: %s\n\n", outputDir)
+	}
 
 	result, err := backup.Run(c, &backup.Options{
 		Namespace: namespace,
@@ -169,13 +301,10 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("\nBackup complete: %d objects\n", result.ObjectCount)
-	for kind, count := range result.ResourceCounts {
-		fmt.Printf("  %-30s %d\n", kind, count)
+	if err := reportBackup(cmd.OutOrStdout(), asJSON, outputDir, result); err != nil {
+		cmd.SilenceUsage = true
+		return err
 	}
-	printWarnings(result.Warnings)
-	printErrors(result.Errors)
-
 	return nil
 }
 
@@ -184,6 +313,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	onConflict, _ := cmd.Flags().GetString("on-conflict")
 	types, _ := cmd.Flags().GetStringSlice("types")
+	asJSON, _ := cmd.Flags().GetBool("json")
 
 	if namespace == "" {
 		return fmt.Errorf("--namespace is required")
@@ -201,12 +331,13 @@ func runRestore(cmd *cobra.Command, args []string) error {
 
 	backupDir := args[0]
 
-	if dryRun {
-		fmt.Println("DRY RUN -- no changes will be made")
+	if !asJSON {
+		if dryRun {
+			fmt.Println("DRY RUN -- no changes will be made")
+		}
+		fmt.Printf("Restoring to namespace %q on %s\n", namespace, c.BaseURL())
+		fmt.Printf("From backup: %s\n\n", backupDir)
 	}
-
-	fmt.Printf("Restoring to namespace %q on %s\n", namespace, c.BaseURL())
-	fmt.Printf("From backup: %s\n\n", backupDir)
 
 	result, err := restore.Run(c, &restore.Options{
 		BackupDir:       backupDir,
@@ -219,15 +350,10 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("\nRestore complete:\n")
-	fmt.Printf("  Created:  %d\n", result.Created)
-	fmt.Printf("  Updated:  %d\n", result.Updated)
-	fmt.Printf("  Skipped:  %d\n", result.Skipped)
-	fmt.Printf("  Failed:   %d\n", result.Failed)
-
-	printWarnings(result.Warnings)
-	printErrors(result.Errors)
-
+	if err := reportRestore(cmd.OutOrStdout(), asJSON, result); err != nil {
+		cmd.SilenceUsage = true
+		return err
+	}
 	return nil
 }
 
@@ -295,10 +421,10 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	printWarnings(report.Warnings)
-	printErrors(report.Errors)
+	printWarnings(os.Stdout, report.Warnings)
+	printErrors(os.Stdout, report.Errors)
 
-	return nil
+	return partial(cmd, len(report.Errors))
 }
 
 func runRevert(cmd *cobra.Command, args []string) error {
@@ -342,10 +468,10 @@ func runRevert(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Skipped:  %d\n", result.Skipped)
 	fmt.Printf("  Failed:   %d\n", result.Failed)
 
-	printWarnings(result.Warnings)
-	printErrors(result.Errors)
+	printWarnings(os.Stdout, result.Warnings)
+	printErrors(os.Stdout, result.Errors)
 
-	return nil
+	return partial(cmd, result.Failed)
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {
@@ -373,7 +499,7 @@ func runNamespaces(cmd *cobra.Command, args []string) error {
 }
 
 // printWarnings groups and prints warnings with a count header.
-func printWarnings(warnings []string) {
+func printWarnings(w io.Writer, warnings []string) {
 	if len(warnings) == 0 {
 		return
 	}
@@ -381,34 +507,34 @@ func printWarnings(warnings []string) {
 	// Count "skipped" warnings (inaccessible resource types) vs other warnings
 	var skippedKinds []string
 	var otherWarnings []string
-	for _, w := range warnings {
-		if strings.HasPrefix(w, "skipped ") && strings.HasSuffix(w, "not accessible (may require subscription)") {
+	for _, warning := range warnings {
+		if strings.HasPrefix(warning, "skipped ") && strings.HasSuffix(warning, "not accessible (may require subscription)") {
 			// Extract the kind name
-			kind := strings.TrimPrefix(w, "skipped ")
+			kind := strings.TrimPrefix(warning, "skipped ")
 			kind = strings.TrimSuffix(kind, ": not accessible (may require subscription)")
 			skippedKinds = append(skippedKinds, kind)
 		} else {
-			otherWarnings = append(otherWarnings, w)
+			otherWarnings = append(otherWarnings, warning)
 		}
 	}
 
 	if len(skippedKinds) > 0 {
-		fmt.Printf("\nWarnings (%d resource types not accessible):\n", len(skippedKinds))
-		fmt.Printf("  Skipped: %s\n", strings.Join(skippedKinds, ", "))
+		fmt.Fprintf(w, "\nWarnings (%d resource types not accessible):\n", len(skippedKinds))
+		fmt.Fprintf(w, "  Skipped: %s\n", strings.Join(skippedKinds, ", "))
 	}
 
-	for _, w := range otherWarnings {
-		fmt.Printf("  ! %s\n", w)
+	for _, warning := range otherWarnings {
+		fmt.Fprintf(w, "  ! %s\n", warning)
 	}
 }
 
 // printErrors prints errors with a count header.
-func printErrors(errs []string) {
+func printErrors(w io.Writer, errs []string) {
 	if len(errs) == 0 {
 		return
 	}
-	fmt.Printf("\nErrors (%d):\n", len(errs))
+	fmt.Fprintf(w, "\nErrors (%d):\n", len(errs))
 	for _, e := range errs {
-		fmt.Printf("  x %s\n", e)
+		fmt.Fprintf(w, "  x %s\n", e)
 	}
 }
