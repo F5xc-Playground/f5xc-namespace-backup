@@ -106,6 +106,9 @@ xcbackup restore \
   ./backup-prod-2026-02-25T13-15-00Z/
 ```
 
+References between objects in the backup (for example an origin pool's healthcheck) are pointed at the target
+namespace, using the source namespace recorded in `manifest.json`. References to `shared` are left alone.
+
 ## Authentication
 
 **API Token** — pass directly or via environment variable:
@@ -149,6 +152,7 @@ xcbackup backup [flags]
 | `--output-dir` | `backup-{ns}-{timestamp}` | Output directory |
 | `--types` | all | Only back up these resource types (comma-separated) |
 | `--exclude-types` | none | Skip these resource types (comma-separated) |
+| `--json` | `false` | Print one JSON result object on stdout instead of text |
 
 ### restore
 
@@ -161,6 +165,7 @@ xcbackup restore [backup-dir] [flags]
 | `--dry-run` | `false` | Preview without making changes |
 | `--on-conflict` | `skip` | Behavior when object exists: `skip`, `overwrite`, or `fail` |
 | `--types` | all | Only restore these resource types |
+| `--json` | `false` | Print one JSON result object on stdout instead of text |
 
 ### diff
 
@@ -196,6 +201,23 @@ xcbackup revert [backup-dir] [flags]
 | `--cert` | | Path to mTLS certificate |
 | `--key` | | Path to mTLS private key |
 | `--parallel` | `10` | Max concurrent API calls |
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Fatal error: bad flags, authentication failure, unreadable backup |
+| `2` | Finished, but some objects or resource types failed (`backup`, `restore`, `revert`, `diff`) |
+
+With `--json`, `backup` and `restore` print one object on stdout (logs stay on stderr), for example:
+
+```json
+{"ok": false, "created": 2, "updated": 0, "skipped": 0, "failed": 2, "retargeted": 3, "warnings": [], "errors": ["..."]}
+```
+
+`backup` reports `ok`, `output_dir`, `object_count`, `resource_counts`, `warnings` and `errors`. A fatal error prints no
+JSON and exits 1.
 
 ## Key Concepts
 

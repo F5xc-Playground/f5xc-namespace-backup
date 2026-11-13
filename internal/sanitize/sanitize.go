@@ -37,12 +37,43 @@ func ForBackup(obj map[string]any) map[string]any {
 }
 
 // ForRestore returns a copy of a backed-up object ready for POST to the API.
-func ForRestore(obj map[string]any, targetNamespace string) map[string]any {
+//
+// It sets metadata.namespace to targetNamespace. When sourceNamespace is set
+// and differs from targetNamespace, it also points every object reference in
+// spec ({"name": ..., "namespace": sourceNamespace, ...}) at targetNamespace,
+// so objects that refer to each other inside the backup still resolve after a
+// restore into a different namespace. References to other namespaces, such as
+// shared, are left alone. It returns the number of references it changed.
+func ForRestore(obj map[string]any, sourceNamespace, targetNamespace string) (map[string]any, int) {
 	result := deepCopy(obj)
 	if md, ok := result["metadata"].(map[string]any); ok {
 		md["namespace"] = targetNamespace
 	}
-	return result
+	if sourceNamespace == "" || sourceNamespace == targetNamespace {
+		return result, 0
+	}
+	return result, retarget(result["spec"], sourceNamespace, targetNamespace)
+}
+
+func retarget(node any, from, to string) int {
+	n := 0
+	switch v := node.(type) {
+	case map[string]any:
+		if ns, ok := v["namespace"].(string); ok && ns == from {
+			if _, ok := v["name"].(string); ok {
+				v["namespace"] = to
+				n++
+			}
+		}
+		for _, child := range v {
+			n += retarget(child, from, to)
+		}
+	case []any:
+		for _, child := range v {
+			n += retarget(child, from, to)
+		}
+	}
+	return n
 }
 
 func deepCopy(obj map[string]any) map[string]any {

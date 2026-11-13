@@ -270,3 +270,39 @@ func TestIntegration_RestoreErrorInjection(t *testing.T) {
 		t.Error("expected at least one error message")
 	}
 }
+
+func TestIntegration_RestoreRetargetsRefsToTargetNamespace(t *testing.T) {
+	srv := testutil.NewFakeXCServer()
+	defer srv.Close()
+
+	backupDir := writeBackupDir(t, map[string]map[string]map[string]any{
+		"healthcheck": {
+			"hc1": {"metadata": map[string]any{"name": "hc1", "namespace": "test-ns"}, "spec": map[string]any{"timeout": float64(3)}},
+		},
+		"origin-pool": {
+			"pool1": {"metadata": map[string]any{"name": "pool1", "namespace": "test-ns"}, "spec": map[string]any{
+				"healthcheck": []any{map[string]any{"name": "hc1", "namespace": "test-ns", "tenant": "t"}},
+			}},
+		},
+	})
+
+	c := client.NewForTest(srv.URL(), &http.Client{}, "test-token")
+	resources := registry.FilterByKinds(registry.All(), []string{"healthcheck", "origin-pool"})
+
+	result, err := Run(c, &Options{BackupDir: backupDir, TargetNamespace: "restored-ns", Resources: resources, OnConflict: "skip"})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if result.Retargeted != 1 {
+		t.Errorf("Retargeted = %d, want 1", result.Retargeted)
+	}
+
+	pool, err := c.Get("/api/config/namespaces/restored-ns/origin_pools/pool1")
+	if err != nil {
+		t.Fatalf("get pool: %v", err)
+	}
+	ref := pool["spec"].(map[string]any)["healthcheck"].([]any)[0].(map[string]any)
+	if ref["namespace"] != "restored-ns" {
+		t.Errorf("healthcheck ref namespace = %v, want restored-ns", ref["namespace"])
+	}
+}
